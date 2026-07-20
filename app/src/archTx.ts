@@ -246,24 +246,75 @@ export async function ensureFunded(
   throw new Error('Funding did not land in time. The testnet faucet may be rate limiting.')
 }
 
+/**
+ * Normalize the many shapes Arch reports a transaction status in.
+ *
+ * Observed on testnet: `{ "type": "processed" }`. Earlier code did
+ * `Object.keys(status)[0]`, which yields the literal string "type" and therefore never
+ * matched "Processed", so every successful transaction polled until it timed out.
+ * Handle the tagged-object form, the bare-key form and the plain-string form, and
+ * compare case-insensitively.
+ */
+export function normalizeStatus(status: unknown): string {
+  if (status == null) return ''
+  if (typeof status === 'string') return status.toLowerCase()
+  if (typeof status === 'object') {
+    const obj = status as Record<string, unknown>
+    // { type: "processed" } / { status: "processed" }
+    for (const field of ['type', 'status', 'state']) {
+      const v = obj[field]
+      if (typeof v === 'string') return v.toLowerCase()
+    }
+    // { Processed: {...} } — enum serialized as a single key
+    const keys = Object.keys(obj)
+    if (keys.length === 1) return keys[0].toLowerCase()
+  }
+  return String(status).toLowerCase()
+}
+
+/** Extract a human-readable reason from a failed status, if one is present. */
+function failureReason(status: unknown): string {
+  if (status && typeof status === 'object') {
+    const obj = status as Record<string, unknown>
+    for (const field of ['message', 'error', 'reason', 'Failed']) {
+      const v = obj[field]
+      if (typeof v === 'string') return v
+    }
+  }
+  return JSON.stringify(status)
+}
+
 /** Poll until the transaction is processed, so the UI never reports a result too early. */
-export async function waitProcessed(txid: string, attempts = 40): Promise<any> {
+export async function waitProcessed(txid: string, attempts = 60): Promise<any> {
+  let lastSeen: unknown = null
+
   for (let i = 0; i < attempts; i++) {
     try {
       const p = await getProcessedTransaction(txid)
-      if (p && p.status) {
-        const status = typeof p.status === 'string' ? p.status : Object.keys(p.status)[0]
-        if (status === 'Processed' || status === 'Finalized') return p
-        if (status === 'Failed') {
-          throw new Error(
-            `Transaction failed on-chain: ${JSON.stringify(p.status)}`,
-          )
+      if (p && p.status !== undefined) {
+        lastSeen = p.status
+        const status = normalizeStatus(p.status)
+
+        if (status === 'processed' || status === 'finalized' || status === 'confirmed') {
+          return p
         }
+        if (status === 'failed' || status === 'error') {
+          throw new Error(`Transaction failed on-chain: ${failureReason(p.status)}`)
+        }
+        // Anything else (e.g. "pending") means keep waiting.
       }
     } catch (e: any) {
-      if (String(e.message).includes('failed on-chain')) throw e
+      if (String(e?.message).includes('failed on-chain')) throw e
+      // Not indexed yet; keep polling.
     }
     await new Promise((r) => setTimeout(r, 1500))
   }
-  throw new Error('Timed out waiting for the transaction to be processed')
+
+  throw new Error(
+    lastSeen
+      ? `Timed out waiting for confirmation. Last status seen: ${JSON.stringify(lastSeen)}. ` +
+        `The transaction ${txid.slice(0, 12)}… may still have succeeded.`
+      : `Timed out waiting for the transaction to be indexed (${txid.slice(0, 12)}…). ` +
+        'It may still have succeeded; check the round below before retrying.',
+  )
 }
