@@ -1,0 +1,22 @@
+[package]
+name = "coinflip_escrow"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+arch_program = "0.6.7"
+borsh = { version = "1.5.1", features = ["derive"] }
+
+[features]
+# Excludes the SBF entrypoint (and its global allocator) from host builds.
+# Integration tests MUST enable this: cargo test --features no-entrypoint
+no-entrypoint = []
+
+[dev-dependencies]
+arch_sdk = "0.6.7"
+serial_test = "3.1"
+bitcoin = "0.32.5"
+hex = "0.4"
+
+[lib]
+crate-type = ["cdylib", "lib"]

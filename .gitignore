@@ -1,0 +1,29 @@
+# ---- SECRETS: never commit these ----
+# arch_sdk's with_secret_key_file() writes RAW PRIVATE KEYS to these files.
+# Committing one lets anyone drain the corresponding account.
+.program.json
+.authority.json
+*-keypair.json
+*.key
+.env
+.env.*
+!.env.example
+
+# ---- build artifacts ----
+target/
+**/target/
+
+# ---- local chain state ----
+.arch_data/
+.arch-data/
+.arch-bootnode-data/
+
+# ---- node ----
+node_modules/
+dist/
+.vercel/
+
+# ---- os ----
+.DS_Store
+.testnet-authority.json
+.testnet-program.json
