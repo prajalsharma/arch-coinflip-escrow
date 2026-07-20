@@ -52,6 +52,9 @@ struct AppState {
     /// The on-chain terminal-state guard is the real protection; this stops a
     /// retried request from returning a confusing error after a successful settle.
     settled: Mutex<HashMap<(String, u64), SettleResponse>>,
+    /// Resolved CORS origins, surfaced on /health so a misconfigured deploy is
+    /// diagnosable from outside without shell access to the container.
+    cors_origins: Vec<String>,
 }
 
 fn env_or(key: &str, default: &str) -> String {
@@ -162,6 +165,14 @@ struct HealthResponse {
     program_id: String,
     house_authority: String,
     block_height: Option<u64>,
+    cors: CorsInfo,
+}
+
+#[derive(Serialize)]
+struct CorsInfo {
+    /// false == ALLOWED_ORIGIN was not seen by the process at all.
+    restricted: bool,
+    allowed_origins: Vec<String>,
 }
 
 fn parse_pubkey(s: &str) -> Result<Pubkey, String> {
@@ -191,6 +202,10 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
         program_id: state.program_id.to_string(),
         house_authority: state.authority_pk.to_string(),
         block_height: height,
+        cors: CorsInfo {
+            restricted: !state.cors_origins.is_empty(),
+            allowed_origins: state.cors_origins.clone(),
+        },
     })
 }
 
@@ -468,17 +483,11 @@ async fn main() {
     tracing::info!(program = %program_id, "program");
     tracing::info!(authority = %authority_pk, "house authority");
 
-    let state = Arc::new(AppState {
-        config,
-        program_id,
-        authority_kp,
-        authority_pk,
-        settled: Mutex::new(HashMap::new()),
-    });
 
     // CORS. Defaults to permissive for local development, but set ALLOWED_ORIGIN in
     // production (e.g. https://your-app.vercel.app) so only your frontend can call
     // the settlement endpoint. Comma-separate for multiple origins.
+    let mut resolved_origins: Vec<String> = Vec::new();
     let cors = match std::env::var("ALLOWED_ORIGIN") {
         Ok(raw) if !raw.trim().is_empty() => {
             let mut list: Vec<HeaderValue> = Vec::new();
@@ -512,6 +521,7 @@ async fn main() {
                 match o.parse::<HeaderValue>() {
                     Ok(v) => {
                         tracing::info!(origin = %o, "CORS allowing origin");
+                        resolved_origins.push(o.clone());
                         list.push(v);
                     }
                     Err(_) => {
@@ -526,6 +536,7 @@ async fn main() {
                     "ALLOWED_ORIGIN was set but no valid origin parsed — falling back to OPEN CORS \
                      so the app still works. Fix the value; expected form: https://your-app.vercel.app"
                 );
+                resolved_origins.clear();
                 CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any)
             } else {
                 CorsLayer::new()
@@ -539,6 +550,16 @@ async fn main() {
             CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any)
         }
     };
+
+    // NOTE: built after the CORS block so the resolved origin list can be stored.
+    let state = Arc::new(AppState {
+        config,
+        program_id,
+        authority_kp,
+        authority_pk,
+        settled: Mutex::new(HashMap::new()),
+        cors_origins: resolved_origins.clone(),
+    });
 
     let app = Router::new()
         .route("/health", get(health))
