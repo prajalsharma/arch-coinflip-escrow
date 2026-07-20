@@ -40,6 +40,7 @@ export function openSessionInstruction(
   playerHex: string,
   sessionId: bigint,
   wager: bigint,
+  houseTreasury: Uint8Array,
 ): SdkInstruction {
   const program = PubkeyUtil.fromHex(PROGRAM_ID_HEX)
   const player = PubkeyUtil.fromHex(playerHex)
@@ -59,6 +60,9 @@ export function openSessionInstruction(
       { pubkey: session, is_signer: false, is_writable: true },
       { pubkey: vault, is_signer: false, is_writable: true },
       { pubkey: SYSTEM_PROGRAM, is_signer: false, is_writable: false },
+      // The program checks this against config.house_treasury and refuses a bet the
+      // house cannot cover, so the treasury must be passed in.
+      { pubkey: houseTreasury, is_signer: false, is_writable: false },
     ],
     data,
   }

@@ -310,6 +310,7 @@ fn demo_open_blocking(
             AccountMeta::new(session_pda, false),
             AccountMeta::new(vault_pda, false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+            AccountMeta::new_readonly(state.authority_pk, false), // house treasury
         ],
         data: borsh::to_vec(&EscrowInstruction::OpenSession { session_id, wager })
             .map_err(|e| SettleError::Internal(format!("serialize: {e}")))?,

@@ -4,7 +4,7 @@ A minimal demonstration that **Arch Network can support a game-like application*
 escrowed on-chain in a PDA vault, the game result is decided off-chain, and payout is settled
 on-chain by a trusted house authority.
 
-**Live on Arch testnet.** Program ID: `e2c42f6caec4783e4573085e10c7125edaf182fda4b0f8cbb96f17ae72a141c4`
+**Live on Arch testnet.** Program ID: `8ea69ca483247ded86a152bc809e05caf1f0326c604877f8071947420053c635`
 
 ```
 network        : testnet (Testnet4)
@@ -160,7 +160,7 @@ cd backend
 cargo build
 
 HOUSE_AUTHORITY_KEY_FILE=../program/.testnet-authority.json \
-PROGRAM_ID=e2c42f6caec4783e4573085e10c7125edaf182fda4b0f8cbb96f17ae72a141c4 \
+PROGRAM_ID=8ea69ca483247ded86a152bc809e05caf1f0326c604877f8071947420053c635 \
 ARCH_NETWORK=testnet PORT=8091 \
 cargo run
 ```
@@ -224,7 +224,7 @@ A one-page React app. Playable on Arch testnet with **no wallet install required
 # terminal 1 — settlement backend
 cd backend
 HOUSE_AUTHORITY_KEY_FILE=../program/.testnet-authority.json \
-PROGRAM_ID=e2c42f6caec4783e4573085e10c7125edaf182fda4b0f8cbb96f17ae72a141c4 \
+PROGRAM_ID=8ea69ca483247ded86a152bc809e05caf1f0326c604877f8071947420053c635 \
 ARCH_NETWORK=testnet PORT=8091 cargo run
 
 # terminal 2 — frontend

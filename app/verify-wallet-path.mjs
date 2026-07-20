@@ -15,7 +15,7 @@ bitcoin.initEccLib(ecc)
 const ECPair = (ecpairPkg.ECPairFactory || ecpairPkg.default || ecpairPkg)(ecc)
 
 const RPC = 'https://rpc.testnet.arch.network'
-const PROGRAM = 'e2c42f6caec4783e4573085e10c7125edaf182fda4b0f8cbb96f17ae72a141c4'
+const PROGRAM = '8ea69ca483247ded86a152bc809e05caf1f0326c604877f8071947420053c635'
 const NET = bitcoin.networks.testnet
 
 let id = 0
@@ -96,6 +96,9 @@ function u64le(n) {
   return o
 }
 
+const HOUSE_TREASURY = Uint8Array.from(
+  Buffer.from('ab82155fd2c666ef5c66260bf0b9728fb423a40234514eceb65290422f005923', 'hex'),
+)
 const enc = new TextEncoder()
 const programId = PubkeyUtil.fromHex(PROGRAM)
 
@@ -118,6 +121,7 @@ function openSessionIx(playerHex, sessionId, wager) {
         { pubkey: session, is_signer: false, is_writable: true },
         { pubkey: vault, is_signer: false, is_writable: true },
         { pubkey: new Uint8Array(32), is_signer: false, is_writable: false },
+        { pubkey: HOUSE_TREASURY, is_signer: false, is_writable: false },
       ],
       data,
     },

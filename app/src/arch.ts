@@ -16,9 +16,16 @@ export const BACKEND_URL = (
 ).replace(/\/+$/, '')
 export const ARCH_RPC_URL =
   import.meta.env.VITE_ARCH_RPC_URL ?? 'https://rpc.testnet.arch.network'
+/**
+ * Demo mode lets someone play without a wallet, using a server-held throwaway key.
+ * That makes wallet connect decorative, so it is OFF unless explicitly enabled.
+ * Set VITE_ENABLE_DEMO=true only for environments where you want a no-wallet showcase.
+ */
+export const DEMO_ENABLED = import.meta.env.VITE_ENABLE_DEMO === 'true'
+
 export const PROGRAM_ID_HEX =
   import.meta.env.VITE_PROGRAM_ID ??
-  'e2c42f6caec4783e4573085e10c7125edaf182fda4b0f8cbb96f17ae72a141c4'
+  '8ea69ca483247ded86a152bc809e05caf1f0326c604877f8071947420053c635'
 
 export const rpc = new RpcConnection(ARCH_RPC_URL)
 const programId = PubkeyUtil.fromHex(PROGRAM_ID_HEX)
@@ -181,4 +188,15 @@ export async function connectWallet(kind: WalletKind): Promise<string> {
   const addr = res?.result?.[0]?.address
   if (!addr) throw new Error('no accounts returned')
   return addr
+}
+
+/**
+ * Read the house treasury out of the on-chain Config account.
+ * Layout: authority(32) | house_treasury(32) | min_wager(8) | max_wager(8) | bump(1)
+ */
+export async function readHouseTreasury(): Promise<Uint8Array> {
+  const info: any = await rpc.readAccountInfo(configPda())
+  const data = Uint8Array.from(info.data)
+  if (data.length < 64) throw new Error('Config account is too small; program may be out of date')
+  return data.slice(32, 64)
 }

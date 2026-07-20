@@ -44,6 +44,9 @@ pub enum EscrowError {
     WrongPlayer = 5,
     BadPda = 6,
     InsufficientVault = 7,
+    BadTreasury = 8,
+    HouseUnderfunded = 9,
+    TooEarlyToReclaim = 10,
 }
 
 impl From<EscrowError> for ProgramError {
@@ -56,23 +59,71 @@ impl From<EscrowError> for ProgramError {
 // State
 // ---------------------------------------------------------------------------
 
-/// Session lifecycle. Settled states are TERMINAL — this is the double-claim guard.
+/// Session lifecycle. Settled states are TERMINAL, which is the double-claim guard.
 pub const STATUS_OPEN: u8 = 0;
 pub const STATUS_WON: u8 = 1;
 pub const STATUS_LOST: u8 = 2;
+pub const STATUS_RECLAIMED: u8 = 3;
+
+/// How long the house has to settle before the player can take their stake back.
+/// Without this the house can lock a player's funds forever by doing nothing.
+pub const RECLAIM_TIMEOUT_SECS: i64 = 3600;
+
+/// The only key allowed to run InitializeConfig.
+///
+/// Pinned at build time on purpose. If any signer could initialize, whoever called first
+/// on a fresh deployment would own the config permanently and could drain every vault.
+/// Override at build time: ARCH_COINFLIP_AUTHORITY=<64-char hex> cargo build-sbf
+pub const EXPECTED_AUTHORITY: [u8; 32] = match option_env!("ARCH_COINFLIP_AUTHORITY") {
+    Some(_) => parse_authority_hex(),
+    // Default is the testnet house key this repo deploys with.
+    None => [
+        0xab, 0x82, 0x15, 0x5f, 0xd2, 0xc6, 0x66, 0xef, 0x5c, 0x66, 0x26, 0x0b, 0xf0, 0xb9,
+        0x72, 0x8f, 0xb4, 0x23, 0xa4, 0x02, 0x34, 0x51, 0x4e, 0xce, 0xb6, 0x52, 0x90, 0x42,
+        0x2f, 0x00, 0x59, 0x23,
+    ],
+};
+
+/// const-fn hex parse so the authority can be pinned without a build script.
+const fn parse_authority_hex() -> [u8; 32] {
+    let hex = match option_env!("ARCH_COINFLIP_AUTHORITY") {
+        Some(h) => h.as_bytes(),
+        None => panic!("unreachable"),
+    };
+    assert!(hex.len() == 64, "ARCH_COINFLIP_AUTHORITY must be 64 hex chars");
+    let mut out = [0u8; 32];
+    let mut i = 0;
+    while i < 32 {
+        out[i] = hex_nibble(hex[i * 2]) * 16 + hex_nibble(hex[i * 2 + 1]);
+        i += 1;
+    }
+    out
+}
+
+const fn hex_nibble(c: u8) -> u8 {
+    match c {
+        b'0'..=b'9' => c - b'0',
+        b'a'..=b'f' => c - b'a' + 10,
+        b'A'..=b'F' => c - b'A' + 10,
+        _ => panic!("ARCH_COINFLIP_AUTHORITY contains a non-hex character"),
+    }
+}
 
 /// Global house config. PDA seeds: ["config"]
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct Config {
     /// The only key allowed to settle sessions.
     pub authority: Pubkey,
+    /// The only account losing stakes may be paid into, and the account that funds wins.
+    /// Stored so settlement cannot redirect funds to an attacker-chosen address.
+    pub house_treasury: Pubkey,
     pub min_wager: u64,
     pub max_wager: u64,
     pub bump: u8,
 }
 
 impl Config {
-    pub const LEN: usize = 32 + 8 + 8 + 1; // 49
+    pub const LEN: usize = 32 + 32 + 8 + 8 + 1; // 81
 }
 
 /// One game session. PDA seeds: ["session", player, session_id_le]
@@ -112,6 +163,13 @@ pub enum EscrowInstruction {
     ///
     /// `player_won` is the OFF-CHAIN game result, attested by the authority's signature.
     SettleSession { player_won: bool },
+
+    /// Accounts: [0] player (signer, writable), [1] session PDA (writable),
+    ///           [2] vault PDA (writable), [3] system program
+    ///
+    /// Player-initiated escape hatch. After RECLAIM_TIMEOUT_SECS an unsettled session can be
+    /// refunded by the player alone, so the house cannot lock funds by going silent.
+    ReclaimSession,
 }
 
 // ---------------------------------------------------------------------------
@@ -136,6 +194,7 @@ pub fn process_instruction<'a>(
         EscrowInstruction::SettleSession { player_won } => {
             settle_session(program_id, accounts, player_won)
         }
+        EscrowInstruction::ReclaimSession => reclaim_session(program_id, accounts),
     }
 }
 
@@ -156,6 +215,11 @@ fn initialize_config<'a>(
 
     if !authority.is_signer {
         return Err(ProgramError::MissingRequiredSignature);
+    }
+    // C-1: without this, whoever calls first on a fresh deployment owns the config
+    // forever and can drain every vault. The authority is pinned at build time.
+    if authority.key.serialize() != EXPECTED_AUTHORITY {
+        return Err(EscrowError::BadAuthority.into());
     }
     if min_wager == 0 || max_wager < min_wager {
         return Err(EscrowError::WagerOutOfBounds.into());
@@ -184,7 +248,14 @@ fn initialize_config<'a>(
         &[&[b"config", &[bump]]],
     )?;
 
-    let config = Config { authority: *authority.key, min_wager, max_wager, bump };
+    // The treasury is fixed at initialization so settlement cannot redirect funds later.
+    let config = Config {
+        authority: *authority.key,
+        house_treasury: *authority.key,
+        min_wager,
+        max_wager,
+        bump,
+    };
     write_state(config_info, &config)
 }
 
@@ -204,6 +275,7 @@ fn open_session<'a>(
     let session_info = next_account_info(account_iter)?;
     let vault_info = next_account_info(account_iter)?;
     let system_program = next_account_info(account_iter)?;
+    let house_treasury = next_account_info(account_iter)?;
 
     if !player.is_signer {
         return Err(ProgramError::MissingRequiredSignature);
@@ -212,6 +284,15 @@ fn open_session<'a>(
     let config = read_config(program_id, config_info)?;
     if wager < config.min_wager || wager > config.max_wager {
         return Err(EscrowError::WagerOutOfBounds.into());
+    }
+
+    // M-6: refuse a bet the house cannot pay out. Otherwise a winning settlement fails
+    // and the player's stake sits in an open session until the reclaim timeout.
+    if config.house_treasury != *house_treasury.key {
+        return Err(EscrowError::BadTreasury.into());
+    }
+    if **house_treasury.try_borrow_lamports()? < wager {
+        return Err(EscrowError::HouseUnderfunded.into());
     }
 
     // Session PDA — unique per (player, session_id), so a duplicate id can't be reused.
@@ -300,8 +381,24 @@ fn settle_session<'a>(
     if session_info.owner != program_id {
         return Err(ProgramError::IllegalOwner);
     }
-    let mut session = GameSession::try_from_slice(&session_info.try_borrow_data()?[..GameSession::LEN])
-        .map_err(|_| ProgramError::InvalidAccountData)?;
+    let mut session = read_session(session_info)?;
+
+    // M-5: re-derive the session PDA from stored state instead of trusting the caller.
+    // The vault is derived from this key, so it must be proven, not assumed.
+    let expected_session = Pubkey::find_program_address(
+        &[b"session", session.player.as_ref(), &session.session_id.to_le_bytes()],
+        program_id,
+    )
+    .0;
+    if session_info.key != &expected_session {
+        return Err(EscrowError::BadPda.into());
+    }
+
+    // C-2: the treasury is fixed in config. Without this, settlement could pay losing
+    // stakes into any account the caller chose.
+    if config.house_treasury != *house_treasury.key {
+        return Err(EscrowError::BadTreasury.into());
+    }
 
     if session.status != STATUS_OPEN {
         // Terminal state — blocks double settlement / replay.
@@ -362,8 +459,93 @@ fn settle_session<'a>(
 }
 
 // ---------------------------------------------------------------------------
+// 3. ReclaimSession  (H-3: the player's escape hatch)
+// ---------------------------------------------------------------------------
+
+/// Refund an unsettled session to its player once the house has had long enough.
+///
+/// Without this the house can lock a player's stake forever simply by never settling:
+/// go offline, lose the key, run out of funds, or just decline to pay a winner. The
+/// player had no recourse at all. This gives them a unilateral exit that needs no
+/// cooperation from the house.
+fn reclaim_session<'a>(
+    program_id: &Pubkey,
+    accounts: &'a [AccountInfo<'a>],
+) -> Result<(), ProgramError> {
+    let account_iter = &mut accounts.iter();
+    let player = next_account_info(account_iter)?;
+    let session_info = next_account_info(account_iter)?;
+    let vault_info = next_account_info(account_iter)?;
+    let system_program = next_account_info(account_iter)?;
+
+    // Only the player can reclaim, and only for their own session.
+    if !player.is_signer {
+        return Err(ProgramError::MissingRequiredSignature);
+    }
+    if session_info.owner != program_id {
+        return Err(ProgramError::IllegalOwner);
+    }
+
+    let mut session = read_session(session_info)?;
+    if session.player != *player.key {
+        return Err(EscrowError::WrongPlayer.into());
+    }
+    // Terminal states are shared with settlement, so a settled session can never be
+    // reclaimed and a reclaimed session can never be settled.
+    if session.status != STATUS_OPEN {
+        return Err(EscrowError::SessionNotOpen.into());
+    }
+
+    // The house must have had a fair chance to settle first.
+    let now = get_clock().unix_timestamp;
+    if now < session.opened_at.saturating_add(RECLAIM_TIMEOUT_SECS) {
+        return Err(EscrowError::TooEarlyToReclaim.into());
+    }
+
+    let expected_session = Pubkey::find_program_address(
+        &[b"session", session.player.as_ref(), &session.session_id.to_le_bytes()],
+        program_id,
+    )
+    .0;
+    if session_info.key != &expected_session {
+        return Err(EscrowError::BadPda.into());
+    }
+
+    let vault_seeds: &[&[u8]] = &[b"vault", session_info.key.as_ref()];
+    let (expected_vault, vault_bump) = Pubkey::find_program_address(vault_seeds, program_id);
+    if vault_info.key != &expected_vault {
+        return Err(EscrowError::BadPda.into());
+    }
+
+    let stake = session.wager;
+    if **vault_info.try_borrow_lamports()? < stake {
+        return Err(EscrowError::InsufficientVault.into());
+    }
+
+    invoke_signed(
+        &system_instruction::transfer(vault_info.key, player.key, stake),
+        &[vault_info.clone(), player.clone(), system_program.clone()],
+        &[&[b"vault", session_info.key.as_ref(), &[vault_bump]]],
+    )?;
+
+    session.status = STATUS_RECLAIMED;
+    write_state(session_info, &session)
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Decode a GameSession without panicking on a short account.
+/// H-4: slicing `[..LEN]` panics when the account is smaller, which the 49-byte config
+/// account triggered. A panic is never an acceptable error path.
+fn read_session(info: &AccountInfo) -> Result<GameSession, ProgramError> {
+    let data = info.try_borrow_data()?;
+    let slice = data
+        .get(..GameSession::LEN)
+        .ok_or(ProgramError::InvalidAccountData)?;
+    GameSession::try_from_slice(slice).map_err(|_| ProgramError::InvalidAccountData)
+}
 
 /// Load config from its PDA, verifying the address is program-derived.
 fn read_config(program_id: &Pubkey, config_info: &AccountInfo) -> Result<Config, ProgramError> {
@@ -374,8 +556,11 @@ fn read_config(program_id: &Pubkey, config_info: &AccountInfo) -> Result<Config,
     if config_info.owner != program_id || config_info.data_is_empty() {
         return Err(EscrowError::NotInitialized.into());
     }
-    Config::try_from_slice(&config_info.try_borrow_data()?[..Config::LEN])
-        .map_err(|_| ProgramError::InvalidAccountData)
+    let data = config_info.try_borrow_data()?;
+    let slice = data
+        .get(..Config::LEN)
+        .ok_or(ProgramError::InvalidAccountData)?;
+    Config::try_from_slice(slice).map_err(|_| ProgramError::InvalidAccountData)
 }
 
 /// Borsh-serialize state into an account's data buffer.

@@ -55,7 +55,7 @@ New → Web Service → **Runtime: Docker**. Dockerfile path `./Dockerfile`, con
 | Variable | Value | Notes |
 |---|---|---|
 | `HOUSE_AUTHORITY_SECRET_KEY` | 64-char hex | **Secret.** See below |
-| `PROGRAM_ID` | `e2c42f6caec4783e4573085e10c7125edaf182fda4b0f8cbb96f17ae72a141c4` | Public |
+| `PROGRAM_ID` | `8ea69ca483247ded86a152bc809e05caf1f0326c604877f8071947420053c635` | Public |
 | `ARCH_NETWORK` | `testnet` | |
 | `ALLOWED_ORIGIN` | `https://your-app.vercel.app` | Set this in production |
 | `PORT` | usually injected by the host | Defaults to 8080 |
@@ -93,7 +93,7 @@ curl https://your-backend.up.railway.app/health
 |---|---|
 | `VITE_BACKEND_URL` | `https://your-backend.up.railway.app` — no trailing slash |
 | `VITE_ARCH_RPC_URL` | `https://rpc.testnet.arch.network` |
-| `VITE_PROGRAM_ID` | `e2c42f6caec4783e4573085e10c7125edaf182fda4b0f8cbb96f17ae72a141c4` |
+| `VITE_PROGRAM_ID` | `8ea69ca483247ded86a152bc809e05caf1f0326c604877f8071947420053c635` |
 
 6. Deploy.
 

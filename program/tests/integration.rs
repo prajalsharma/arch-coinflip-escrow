@@ -33,15 +33,50 @@ const PROGRAM_FILE_PATH: &str = ".program.json";
 /// `BadAuthority` against the config written by whichever test ran first.
 const AUTHORITY_FILE_PATH: &str = ".authority.json";
 
+fn env_or(k: &str, d: &str) -> String {
+    std::env::var(k).unwrap_or_else(|_| d.to_string())
+}
+
+/// Network under test. Defaults to localnet; set ARCH_TEST_NETWORK=testnet to run against
+/// the deployed program, which is required for the security tests because the program
+/// pins EXPECTED_AUTHORITY at build time to the testnet house key.
+fn test_config() -> (Config, &'static str, bool) {
+    if env_or("ARCH_TEST_NETWORK", "localnet") == "testnet" {
+        let mut c = Config::testnet();
+        c.arch_node_url = env_or("ARCH_RPC_URL", "https://rpc.testnet.arch.network");
+        c.titan_url = env_or("ARCH_TITAN_URL", "https://titan.testnet.arch.network");
+        c.node_endpoint = env_or("BITCOIN_RPC_URL", "http://bitcoin-rpc.test.arch.network:80");
+        c.node_username = env_or("BITCOIN_RPC_USER", "bitcoin");
+        c.node_password =
+            env_or("BITCOIN_RPC_PASSWORD", "0F_Ed53o4kR7nxh3xNaSQx-2M3TY16L55mz5y9fjdrk");
+        (c, ".testnet-authority.json", true)
+    } else {
+        (Config::localnet(), AUTHORITY_FILE_PATH, false)
+    }
+}
+
 /// Deploy the program (idempotent) and return a funded, stable house authority.
 fn setup() -> (ArchRpcClient, Config, Pubkey, UntweakedKeypair, Pubkey) {
-    let config = Config::localnet();
+    let (config, auth_file, is_testnet) = test_config();
     let client = ArchRpcClient::new(&config);
 
     let (authority_keypair, authority_pubkey) =
-        with_secret_key_file(AUTHORITY_FILE_PATH).expect("load/create authority keypair");
+        with_secret_key_file(auth_file).expect("load/create authority keypair");
     // Already-funded on a second run is fine — ignore the error rather than failing setup.
     let _ = client.create_and_fund_account_with_faucet(&authority_keypair);
+
+    // On testnet the program is already deployed and its id is fixed; redeploying from a
+    // test would be wrong. Use the known id instead.
+    if is_testnet {
+        let program_pubkey = Pubkey::from_slice(
+            &hex::decode(env_or(
+                "PROGRAM_ID",
+                "8ea69ca483247ded86a152bc809e05caf1f0326c604877f8071947420053c635",
+            ))
+            .expect("PROGRAM_ID hex"),
+        );
+        return (client, config, program_pubkey, authority_keypair, authority_pubkey);
+    }
 
     let (program_keypair, _) =
         with_secret_key_file(PROGRAM_FILE_PATH).expect("load/create program keypair");
@@ -161,6 +196,7 @@ fn test_escrow_lamport_round_trip() {
                 AccountMeta::new(session_pda, false),
                 AccountMeta::new(vault_pda, false),
                 AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+                AccountMeta::new_readonly(authority_pk, false), // house treasury
             ],
             data: borsh::to_vec(&open).unwrap(),
         },
@@ -244,6 +280,7 @@ fn test_player_wins_gets_paid() {
                 AccountMeta::new(session_pda, false),
                 AccountMeta::new(vault_pda, false),
                 AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+                AccountMeta::new_readonly(authority_pk, false), // house treasury
             ],
             data: borsh::to_vec(&EscrowInstruction::OpenSession { session_id, wager }).unwrap(),
         },
@@ -428,4 +465,179 @@ fn test_unauthorized_authority_is_rejected() {
     assert!(result.is_err(), "UNAUTHORIZED SETTLE SUCCEEDED — anyone can drain vaults!");
     assert_eq!(vault_before, vault_after, "vault balance moved on a rejected settle");
     println!("unauthorized settle correctly rejected: {}", result.unwrap_err());
+}
+
+// ---------------------------------------------------------------------------
+// SECURITY REGRESSION TESTS
+// Each corresponds to a finding in docs/SECURITY.md and must fail loudly if the
+// fix is ever reverted.
+// ---------------------------------------------------------------------------
+
+/// C-1: a key that is not the pinned EXPECTED_AUTHORITY must not be able to
+/// initialize the config. Before the fix, the first caller became the house and
+/// could drain every vault.
+#[ignore]
+#[serial]
+#[test]
+fn test_attacker_cannot_initialize_config() {
+    let (client, config, program_id, _authority_kp, _authority_pk) = setup();
+
+    let (attacker_kp, attacker_pk, _) = generate_new_keypair(config.network);
+    client.create_and_fund_account_with_faucet(&attacker_kp).expect("fund attacker");
+
+    let (config_pda, _) = Pubkey::find_program_address(&[b"config"], &program_id);
+
+    let result = send_expect_failure(
+        &client,
+        &config,
+        Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new(attacker_pk, true),
+                AccountMeta::new(config_pda, false),
+                AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+            ],
+            data: borsh::to_vec(&EscrowInstruction::InitializeConfig {
+                min_wager: 1,
+                max_wager: u64::MAX,
+            })
+            .unwrap(),
+        },
+        attacker_pk,
+        vec![attacker_kp],
+    );
+
+    assert!(
+        result.is_err(),
+        "ATTACKER BECAME THE HOUSE — config initialization is unauthenticated"
+    );
+    println!("C-1 ok: attacker rejected: {}", result.unwrap_err());
+}
+
+/// C-2: settlement must refuse a treasury that is not the one recorded in config.
+/// Before the fix, losing stakes could be routed to any account.
+#[ignore]
+#[serial]
+#[test]
+fn test_settle_rejects_foreign_treasury() {
+    let (client, config, program_id, authority_kp, authority_pk) = setup();
+    let config_pda = ensure_config(&client, &config, program_id, authority_kp, authority_pk);
+
+    let (player_kp, player_pk, _) = generate_new_keypair(config.network);
+    client.create_and_fund_account_with_faucet(&player_kp).expect("fund player");
+
+    let session_id: u64 = 900_101;
+    let wager: u64 = 10_000;
+    let (session_pda, _) = Pubkey::find_program_address(
+        &[b"session", player_pk.as_ref(), &session_id.to_le_bytes()],
+        &program_id,
+    );
+    let (vault_pda, _) = Pubkey::find_program_address(&[b"vault", session_pda.as_ref()], &program_id);
+
+    send_ok(&client, &config, Instruction {
+        program_id,
+        accounts: vec![
+            AccountMeta::new(player_pk, true),
+            AccountMeta::new_readonly(config_pda, false),
+            AccountMeta::new(session_pda, false),
+            AccountMeta::new(vault_pda, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+            AccountMeta::new_readonly(authority_pk, false),
+        ],
+        data: borsh::to_vec(&EscrowInstruction::OpenSession { session_id, wager }).unwrap(),
+    }, player_pk, vec![player_kp]);
+
+    // The authority tries to pay a losing stake into an account it controls but which
+    // is NOT the configured treasury.
+    let (thief_kp, thief_pk, _) = generate_new_keypair(config.network);
+    client.create_and_fund_account_with_faucet(&thief_kp).expect("fund thief");
+
+    let vault_before = client.read_account_info(vault_pda).unwrap().lamports;
+
+    let result = send_expect_failure(&client, &config, Instruction {
+        program_id,
+        accounts: vec![
+            AccountMeta::new_readonly(authority_pk, true),
+            AccountMeta::new_readonly(config_pda, false),
+            AccountMeta::new(session_pda, false),
+            AccountMeta::new(vault_pda, false),
+            AccountMeta::new(player_pk, false),
+            AccountMeta::new(thief_pk, false), // not config.house_treasury
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ],
+        data: borsh::to_vec(&EscrowInstruction::SettleSession { player_won: false }).unwrap(),
+    }, authority_pk, vec![authority_kp]);
+
+    let vault_after = client.read_account_info(vault_pda).unwrap().lamports;
+
+    assert!(result.is_err(), "FUNDS REDIRECTED — treasury is not validated");
+    assert_eq!(vault_before, vault_after, "vault moved on a rejected settle");
+    println!("C-2 ok: foreign treasury rejected: {}", result.unwrap_err());
+}
+
+/// H-3: the reclaim timeout must be enforced. A player cannot pull their stake back
+/// while the house still has a legitimate window to settle.
+#[ignore]
+#[serial]
+#[test]
+fn test_reclaim_respects_timeout() {
+    let (client, config, program_id, authority_kp, authority_pk) = setup();
+    let config_pda = ensure_config(&client, &config, program_id, authority_kp, authority_pk);
+
+    let (player_kp, player_pk, _) = generate_new_keypair(config.network);
+    client.create_and_fund_account_with_faucet(&player_kp).expect("fund player");
+
+    let session_id: u64 = 900_202;
+    let wager: u64 = 10_000;
+    let (session_pda, _) = Pubkey::find_program_address(
+        &[b"session", player_pk.as_ref(), &session_id.to_le_bytes()],
+        &program_id,
+    );
+    let (vault_pda, _) = Pubkey::find_program_address(&[b"vault", session_pda.as_ref()], &program_id);
+
+    send_ok(&client, &config, Instruction {
+        program_id,
+        accounts: vec![
+            AccountMeta::new(player_pk, true),
+            AccountMeta::new_readonly(config_pda, false),
+            AccountMeta::new(session_pda, false),
+            AccountMeta::new(vault_pda, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+            AccountMeta::new_readonly(authority_pk, false),
+        ],
+        data: borsh::to_vec(&EscrowInstruction::OpenSession { session_id, wager }).unwrap(),
+    }, player_pk, vec![player_kp]);
+
+    // Immediately after opening, reclaim must be refused.
+    let result = send_expect_failure(&client, &config, Instruction {
+        program_id,
+        accounts: vec![
+            AccountMeta::new(player_pk, true),
+            AccountMeta::new(session_pda, false),
+            AccountMeta::new(vault_pda, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ],
+        data: borsh::to_vec(&EscrowInstruction::ReclaimSession).unwrap(),
+    }, player_pk, vec![player_kp]);
+
+    assert!(result.is_err(), "EARLY RECLAIM ALLOWED — timeout is not enforced");
+    println!("H-3 ok: early reclaim rejected: {}", result.unwrap_err());
+
+    // And a third party must never reclaim someone else's session.
+    let (stranger_kp, stranger_pk, _) = generate_new_keypair(config.network);
+    client.create_and_fund_account_with_faucet(&stranger_kp).expect("fund stranger");
+
+    let stranger_result = send_expect_failure(&client, &config, Instruction {
+        program_id,
+        accounts: vec![
+            AccountMeta::new(stranger_pk, true),
+            AccountMeta::new(session_pda, false),
+            AccountMeta::new(vault_pda, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ],
+        data: borsh::to_vec(&EscrowInstruction::ReclaimSession).unwrap(),
+    }, stranger_pk, vec![stranger_kp]);
+
+    assert!(stranger_result.is_err(), "STRANGER RECLAIMED ANOTHER PLAYER'S SESSION");
+    println!("H-3 ok: stranger rejected: {}", stranger_result.unwrap_err());
 }

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import {
   ARCH_RPC_URL,
+  DEMO_ENABLED,
+  readHouseTreasury,
   BACKEND_URL,
   PROGRAM_ID_HEX,
   getBalance,
@@ -103,7 +105,8 @@ export default function App() {
       await ensureFunded(pubkeyBytes)
 
       setPhase('signing')
-      const ix = openSessionInstruction(account.pubkeyHex, sid, WAGER)
+      const treasury = await readHouseTreasury()
+      const ix = openSessionInstruction(account.pubkeyHex, sid, WAGER, treasury)
       const txid = await signAndSend([ix], pubkeyBytes, signerFor(account.kind))
 
       setPhase('opening')
@@ -253,7 +256,7 @@ export default function App() {
         <button
           className="flip"
           onClick={account ? playWithWallet : playDemo}
-          disabled={busy || backendOk === false}
+          disabled={busy || backendOk === false || (!account && !DEMO_ENABLED)}
         >
           {busy
             ? stepLabel[phase]
@@ -261,12 +264,14 @@ export default function App() {
               ? result !== null
                 ? 'Flip again'
                 : 'Sign and flip'
-              : result !== null
-                ? 'Flip again (demo)'
-                : 'Try the demo'}
+              : DEMO_ENABLED
+                ? result !== null
+                  ? 'Flip again (demo)'
+                  : 'Try the demo'
+                : 'Connect a wallet to play'}
         </button>
 
-        {account && !busy && (
+        {account && DEMO_ENABLED && !busy && (
           <button className="ghostlink" onClick={playDemo} disabled={busy}>
             or run a demo round without signing
           </button>
@@ -312,7 +317,9 @@ export default function App() {
             <p className="hint">
               {account
                 ? 'Your wallet signs the bet, your key escrows it on-chain, then the house settles the outcome.'
-                : 'The demo uses a throwaway faucet key instead of yours. Connect a wallet to bet with your own.'}
+                : DEMO_ENABLED
+                  ? 'Demo mode uses a server-held throwaway key, not yours. Connect a wallet to bet with your own key.'
+                  : 'Every bet is signed by the player’s own Taproot key, so a wallet is required.'}
             </p>
           )}
 
