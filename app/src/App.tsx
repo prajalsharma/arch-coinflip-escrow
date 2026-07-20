@@ -28,7 +28,7 @@ import { PubkeyUtil } from '@arch-network/arch-sdk'
 
 const WAGER = 10_000n
 
-type Phase = 'idle' | 'funding' | 'signing' | 'opening' | 'flipping' | 'settled'
+type Phase = 'idle' | 'funding' | 'faucet' | 'signing' | 'opening' | 'flipping' | 'settled'
 type Mode = 'wallet' | 'demo'
 
 type HistoryRow = { sessionId: string; player: string; won: boolean }
@@ -102,7 +102,7 @@ export default function App() {
     try {
       // A fee payer must exist, be system-owned and be rent-exempt.
       setPhase('funding')
-      await ensureFunded(pubkeyBytes)
+      await ensureFunded(pubkeyBytes, 100_000, () => setPhase('faucet'))
 
       setPhase('signing')
       const treasury = await readHouseTreasury()
@@ -169,6 +169,7 @@ export default function App() {
   const stepLabel: Record<Phase, string> = {
     idle: '',
     funding: 'Checking your Arch account…',
+    faucet: 'Funding your account from the faucet, this can take up to a minute…',
     signing: 'Waiting for your wallet signature…',
     opening: 'Locking your bet in escrow…',
     flipping: 'Flipping…',
@@ -282,9 +283,21 @@ export default function App() {
             <ol className="progress">
               {mode === 'wallet' && (
                 <>
-                  <li className={phase === 'funding' ? 'on' : 'done'}>Arch account ready</li>
                   <li
-                    className={phase === 'signing' ? 'on' : phase === 'funding' ? '' : 'done'}
+                    className={
+                      phase === 'funding' || phase === 'faucet' ? 'on' : 'done'
+                    }
+                  >
+                    {phase === 'faucet' ? 'Funding from faucet (first play only)' : 'Arch account ready'}
+                  </li>
+                  <li
+                    className={
+                      phase === 'signing'
+                        ? 'on'
+                        : phase === 'funding' || phase === 'faucet'
+                          ? ''
+                          : 'done'
+                    }
                   >
                     Signed by your wallet
                   </li>

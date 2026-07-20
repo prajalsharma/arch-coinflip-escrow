@@ -217,7 +217,11 @@ export async function signAndSend(
  * A fee payer must exist, be system-owned and be rent-exempt. Airdrop and wait,
  * because "airdrop returned a txid" does not mean the validator sees the account yet.
  */
-export async function ensureFunded(pubkey: Uint8Array, minLamports = 100_000): Promise<number> {
+export async function ensureFunded(
+  pubkey: Uint8Array,
+  minLamports = 100_000,
+  onFaucetNeeded?: () => void,
+): Promise<number> {
   try {
     const acct = await readAccount(pubkey)
     if (acct && acct.lamports >= minLamports) return acct.lamports
@@ -225,6 +229,9 @@ export async function ensureFunded(pubkey: Uint8Array, minLamports = 100_000): P
     // Account does not exist yet; fall through and fund it.
   }
 
+  // Measured on testnet: the faucet takes anywhere from ~7s to ~50s to become
+  // visible. Tell the UI so it can set expectations instead of looking hung.
+  onFaucetNeeded?.()
   await requestAirdrop(pubkey)
 
   for (let i = 0; i < 30; i++) {
