@@ -27,13 +27,21 @@ use coinflip_escrow::{
 const ELF_PATH: &str = "./target/deploy/coinflip_escrow.so";
 
 /// Testnet preset ships with EMPTY endpoints in arch_sdk 0.6.7 — fill them in.
+///
+/// The Bitcoin RPC credentials below are Arch's own SHARED PUBLIC testnet credentials,
+/// published verbatim in their quick-start docs. They are not a private secret. They are
+/// still env-overridable so nothing sensitive ever has to be edited into source.
 fn testnet_config() -> Config {
+    fn env_or(key: &str, default: &str) -> String {
+        std::env::var(key).unwrap_or_else(|_| default.to_string())
+    }
+
     let mut c = Config::testnet();
-    c.arch_node_url = "https://rpc.testnet.arch.network".to_string();
-    c.titan_url = "https://titan.testnet.arch.network".to_string();
-    c.node_endpoint = "http://bitcoin-rpc.test.arch.network:80".to_string();
-    c.node_username = "bitcoin".to_string();
-    c.node_password = "0F_Ed53o4kR7nxh3xNaSQx-2M3TY16L55mz5y9fjdrk".to_string();
+    c.arch_node_url = env_or("ARCH_RPC_URL", "https://rpc.testnet.arch.network");
+    c.titan_url = env_or("ARCH_TITAN_URL", "https://titan.testnet.arch.network");
+    c.node_endpoint = env_or("BITCOIN_RPC_URL", "http://bitcoin-rpc.test.arch.network:80");
+    c.node_username = env_or("BITCOIN_RPC_USER", "bitcoin");
+    c.node_password = env_or("BITCOIN_RPC_PASSWORD", "0F_Ed53o4kR7nxh3xNaSQx-2M3TY16L55mz5y9fjdrk");
     c
 }
 

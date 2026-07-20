@@ -281,3 +281,151 @@ fn test_player_wins_gets_paid() {
     assert!(after > before, "winner was not paid: {} -> {}", before, after);
     println!("winner paid: {} -> {} (+{})", before, after, after - before);
 }
+
+// ---------------------------------------------------------------------------
+// NEGATIVE TESTS — verify the security guards actually reject attacks.
+// A happy-path-only suite proves nothing about safety.
+// ---------------------------------------------------------------------------
+
+/// Helper: submit and return Err on failure instead of panicking.
+fn send_expect_failure(
+    client: &ArchRpcClient,
+    config: &Config,
+    ix: Instruction,
+    fee_payer: Pubkey,
+    signers: Vec<UntweakedKeypair>,
+) -> Result<(), String> {
+    let tx = build_and_sign_transaction(
+        ArchMessage::new(&[ix], Some(fee_payer), client.get_best_finalized_block_hash().unwrap()),
+        signers,
+        config.network,
+    )
+    .map_err(|e| e.to_string())?;
+    let txids = client.send_transactions(vec![tx]).map_err(|e| e.to_string())?;
+    let processed = client.wait_for_processed_transactions(txids).map_err(|e| e.to_string())?;
+    match &processed[0].status {
+        Status::Processed => Ok(()),
+        other => Err(format!("{:?}", other)),
+    }
+}
+
+/// Open a session and settle it, then try to settle AGAIN.
+/// The second settle must fail — otherwise a winner could drain the vault repeatedly.
+#[ignore]
+#[serial]
+#[test]
+fn test_double_settle_is_rejected() {
+    let (client, config, program_id, authority_kp, authority_pk) = setup();
+    let config_pda = ensure_config(&client, &config, program_id, authority_kp, authority_pk);
+
+    let (player_kp, player_pk, _) = generate_new_keypair(config.network);
+    client.create_and_fund_account_with_faucet(&player_kp).expect("fund player");
+
+    let session_id: u64 = 777_001;
+    let wager: u64 = 10_000;
+    let (session_pda, _) = Pubkey::find_program_address(
+        &[b"session", player_pk.as_ref(), &session_id.to_le_bytes()],
+        &program_id,
+    );
+    let (vault_pda, _) = Pubkey::find_program_address(&[b"vault", session_pda.as_ref()], &program_id);
+
+    send_ok(&client, &config, Instruction {
+        program_id,
+        accounts: vec![
+            AccountMeta::new(player_pk, true),
+            AccountMeta::new_readonly(config_pda, false),
+            AccountMeta::new(session_pda, false),
+            AccountMeta::new(vault_pda, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ],
+        data: borsh::to_vec(&EscrowInstruction::OpenSession { session_id, wager }).unwrap(),
+    }, player_pk, vec![player_kp]);
+
+    let settle_ix = || Instruction {
+        program_id,
+        accounts: vec![
+            AccountMeta::new_readonly(authority_pk, true),
+            AccountMeta::new_readonly(config_pda, false),
+            AccountMeta::new(session_pda, false),
+            AccountMeta::new(vault_pda, false),
+            AccountMeta::new(player_pk, false),
+            AccountMeta::new(authority_pk, true),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ],
+        data: borsh::to_vec(&EscrowInstruction::SettleSession { player_won: true }).unwrap(),
+    };
+
+    // First settle succeeds.
+    send_ok(&client, &config, settle_ix(), authority_pk, vec![authority_kp]);
+
+    // Second settle MUST fail (custom error 4 = SessionNotOpen).
+    let balance_before_replay = client.read_account_info(player_pk).unwrap().lamports;
+    let result = send_expect_failure(&client, &config, settle_ix(), authority_pk, vec![authority_kp]);
+    let balance_after_replay = client.read_account_info(player_pk).unwrap().lamports;
+
+    assert!(result.is_err(), "DOUBLE SETTLE SUCCEEDED — vault can be drained!");
+    assert_eq!(
+        balance_before_replay, balance_after_replay,
+        "player balance changed on a rejected replay"
+    );
+    println!("double-settle correctly rejected: {}", result.unwrap_err());
+}
+
+/// A random key that is NOT the configured authority must not be able to settle.
+#[ignore]
+#[serial]
+#[test]
+fn test_unauthorized_authority_is_rejected() {
+    let (client, config, program_id, authority_kp, authority_pk) = setup();
+    let config_pda = ensure_config(&client, &config, program_id, authority_kp, authority_pk);
+
+    let (player_kp, player_pk, _) = generate_new_keypair(config.network);
+    client.create_and_fund_account_with_faucet(&player_kp).expect("fund player");
+
+    // The attacker: a funded key with no relationship to the house.
+    let (attacker_kp, attacker_pk, _) = generate_new_keypair(config.network);
+    client.create_and_fund_account_with_faucet(&attacker_kp).expect("fund attacker");
+
+    let session_id: u64 = 777_002;
+    let wager: u64 = 10_000;
+    let (session_pda, _) = Pubkey::find_program_address(
+        &[b"session", player_pk.as_ref(), &session_id.to_le_bytes()],
+        &program_id,
+    );
+    let (vault_pda, _) = Pubkey::find_program_address(&[b"vault", session_pda.as_ref()], &program_id);
+
+    send_ok(&client, &config, Instruction {
+        program_id,
+        accounts: vec![
+            AccountMeta::new(player_pk, true),
+            AccountMeta::new_readonly(config_pda, false),
+            AccountMeta::new(session_pda, false),
+            AccountMeta::new(vault_pda, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ],
+        data: borsh::to_vec(&EscrowInstruction::OpenSession { session_id, wager }).unwrap(),
+    }, player_pk, vec![player_kp]);
+
+    let vault_before = client.read_account_info(vault_pda).unwrap().lamports;
+
+    // Attacker signs the settlement themselves, claiming the player won.
+    let result = send_expect_failure(&client, &config, Instruction {
+        program_id,
+        accounts: vec![
+            AccountMeta::new_readonly(attacker_pk, true),
+            AccountMeta::new_readonly(config_pda, false),
+            AccountMeta::new(session_pda, false),
+            AccountMeta::new(vault_pda, false),
+            AccountMeta::new(player_pk, false),
+            AccountMeta::new(attacker_pk, true),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ],
+        data: borsh::to_vec(&EscrowInstruction::SettleSession { player_won: true }).unwrap(),
+    }, attacker_pk, vec![attacker_kp]);
+
+    let vault_after = client.read_account_info(vault_pda).unwrap().lamports;
+
+    assert!(result.is_err(), "UNAUTHORIZED SETTLE SUCCEEDED — anyone can drain vaults!");
+    assert_eq!(vault_before, vault_after, "vault balance moved on a rejected settle");
+    println!("unauthorized settle correctly rejected: {}", result.unwrap_err());
+}
