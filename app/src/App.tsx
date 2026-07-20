@@ -3,8 +3,6 @@ import {
   ARCH_RPC_URL,
   BACKEND_URL,
   PROGRAM_ID_HEX,
-  connectWallet,
-  detectWallets,
   getBalance,
   health,
   openDemoSession,
@@ -13,21 +11,28 @@ import {
   settleSession,
   vaultPda,
   hexOf,
-  type WalletKind,
 } from './arch'
+import { ensureFunded, signAndSend, waitProcessed } from './archTx'
+import { newSessionId, openSessionInstruction } from './game'
+import {
+  connect,
+  detectWallets,
+  signerFor,
+  walletLabel,
+  type WalletAccount,
+  type WalletKind,
+} from './wallet'
+import { PubkeyUtil } from '@arch-network/arch-sdk'
 
-const WAGER = 10_000
+const WAGER = 10_000n
 
-type Phase = 'idle' | 'opening' | 'flipping' | 'settled'
+type Phase = 'idle' | 'funding' | 'signing' | 'opening' | 'flipping' | 'settled'
+type Mode = 'wallet' | 'demo'
 
-type HistoryRow = {
-  sessionId: number
-  player: string
-  won: boolean
-}
+type HistoryRow = { sessionId: string; player: string; won: boolean }
 
 const short = (s: string) => `${s.slice(0, 6)}…${s.slice(-4)}`
-const fmt = (n: number) => n.toLocaleString('en-US')
+const fmt = (n: number | bigint) => Number(n).toLocaleString('en-US')
 
 export default function App() {
   const [phase, setPhase] = useState<Phase>('idle')
@@ -35,16 +40,18 @@ export default function App() {
   const [backendOk, setBackendOk] = useState<boolean | null>(null)
   const [blockHeight, setBlockHeight] = useState<number | null>(null)
 
+  const [wallets, setWallets] = useState<WalletKind[]>([])
+  const [account, setAccount] = useState<WalletAccount | null>(null)
+  const [connecting, setConnecting] = useState(false)
+
   const [player, setPlayer] = useState<string | null>(null)
-  const [sessionId, setSessionId] = useState<number | null>(null)
+  const [sessionId, setSessionId] = useState<string | null>(null)
   const [balance, setBalance] = useState<number | null>(null)
   const [escrowed, setEscrowed] = useState<number>(0)
   const [onChainStatus, setOnChainStatus] = useState<number | null>(null)
   const [result, setResult] = useState<boolean | null>(null)
+  const [mode, setMode] = useState<Mode | null>(null)
   const [history, setHistory] = useState<HistoryRow[]>([])
-
-  const [wallets, setWallets] = useState<WalletKind[]>([])
-  const [walletAddr, setWalletAddr] = useState<string | null>(null)
 
   useEffect(() => {
     health()
@@ -56,54 +63,66 @@ export default function App() {
     setWallets(detectWallets())
   }, [])
 
-  /**
-   * Re-read state from Arch RPC. Never throws: by the time this runs the
-   * settlement has already landed on-chain, so a failed read must not be
-   * allowed to discard a real result.
-   */
-  async function refreshChain(p: string, sid: number) {
+  async function refreshChain(p: string, sid: bigint) {
     try {
-      const [bal, sess] = await Promise.all([
-        getBalance(p),
-        readSession(p, BigInt(sid)),
-      ])
+      const [bal, sess] = await Promise.all([getBalance(p), readSession(p, sid)])
       setBalance(bal)
       if (sess) setOnChainStatus(sess.status)
-      const spda = sessionPda(p, BigInt(sid))
-      setEscrowed(await getBalance(hexOf(vaultPda(spda))))
+      setEscrowed(await getBalance(hexOf(vaultPda(sessionPda(p, sid)))))
     } catch {
-      // Leave the last known values in place rather than blanking the panel.
+      // A failed read must not discard a settlement that already landed.
     }
   }
 
-  async function handlePlay() {
+  async function handleConnect(kind: WalletKind) {
+    setError(null)
+    setConnecting(true)
+    try {
+      setAccount(await connect(kind))
+    } catch (e: any) {
+      setError(e.message ?? String(e))
+    } finally {
+      setConnecting(false)
+    }
+  }
+
+  /** The real flow: the user's own key signs, and their own lamports are escrowed. */
+  async function playWithWallet() {
+    if (!account) return
     setError(null)
     setResult(null)
     setOnChainStatus(null)
-    setPhase('opening')
+    setMode('wallet')
+
+    const pubkeyBytes = PubkeyUtil.fromHex(account.pubkeyHex)
+    const sid = newSessionId()
 
     try {
-      const opened = await openDemoSession(WAGER)
-      setPlayer(opened.player)
-      setSessionId(opened.session_id)
-      setBalance(opened.balance)
-      setEscrowed(opened.escrowed)
+      // A fee payer must exist, be system-owned and be rent-exempt.
+      setPhase('funding')
+      await ensureFunded(pubkeyBytes)
+
+      setPhase('signing')
+      const ix = openSessionInstruction(account.pubkeyHex, sid, WAGER)
+      const txid = await signAndSend([ix], pubkeyBytes, signerFor(account.kind))
+
+      setPhase('opening')
+      await waitProcessed(txid)
+
+      setPlayer(account.pubkeyHex)
+      setSessionId(sid.toString())
       setOnChainStatus(0)
+      await refreshChain(account.pubkeyHex, sid)
 
+      // Only settlement goes through the backend, because it needs the house key.
       setPhase('flipping')
-      const settled = await settleSession(opened.player, opened.session_id)
-
-      // Refresh chain state before revealing the result, so the panel never
-      // shows "Open" next to "You lost".
-      await refreshChain(opened.player, opened.session_id)
+      const settled = await settleSession(account.pubkeyHex, Number(sid))
+      await refreshChain(account.pubkeyHex, sid)
 
       setResult(settled.player_won)
       setPhase('settled')
       setHistory((h) =>
-        [
-          { sessionId: opened.session_id, player: opened.player, won: settled.player_won },
-          ...h,
-        ].slice(0, 6),
+        [{ sessionId: sid.toString(), player: account.pubkeyHex, won: settled.player_won }, ...h].slice(0, 6),
       )
     } catch (e: any) {
       setError(e.message ?? String(e))
@@ -111,17 +130,47 @@ export default function App() {
     }
   }
 
-  async function handleConnect(kind: WalletKind) {
+  /** Fallback so the program stays demonstrable with no wallet installed. */
+  async function playDemo() {
     setError(null)
+    setResult(null)
+    setOnChainStatus(null)
+    setMode('demo')
+    setPhase('opening')
+
     try {
-      setWalletAddr(await connectWallet(kind))
+      const opened = await openDemoSession(Number(WAGER))
+      const sid = BigInt(opened.session_id)
+      setPlayer(opened.player)
+      setSessionId(opened.session_id.toString())
+      setBalance(opened.balance)
+      setEscrowed(opened.escrowed)
+      setOnChainStatus(0)
+
+      setPhase('flipping')
+      const settled = await settleSession(opened.player, opened.session_id)
+      await refreshChain(opened.player, sid)
+
+      setResult(settled.player_won)
+      setPhase('settled')
+      setHistory((h) =>
+        [{ sessionId: opened.session_id.toString(), player: opened.player, won: settled.player_won }, ...h].slice(0, 6),
+      )
     } catch (e: any) {
-      setError(`Wallet connect failed: ${e.message ?? e}`)
+      setError(e.message ?? String(e))
+      setPhase('idle')
     }
   }
 
-  const busy = phase === 'opening' || phase === 'flipping'
-  const disabled = busy || backendOk === false
+  const busy = phase !== 'idle' && phase !== 'settled'
+  const stepLabel: Record<Phase, string> = {
+    idle: '',
+    funding: 'Checking your Arch account…',
+    signing: 'Waiting for your wallet signature…',
+    opening: 'Locking your bet in escrow…',
+    flipping: 'Flipping…',
+    settled: '',
+  }
 
   return (
     <div className="page">
@@ -141,13 +190,51 @@ export default function App() {
         <div className="alert" role="alert">
           <strong>Can’t reach the settlement service</strong>
           <span>
-            Tried <code>{BACKEND_URL}</code>. Check that it is running, that{' '}
-            <code>VITE_BACKEND_URL</code> is correct, and that its{' '}
+            Tried <code>{BACKEND_URL}</code>. Check it is running and that{' '}
             <code>ALLOWED_ORIGIN</code> matches{' '}
             <code>{typeof window !== 'undefined' ? window.location.origin : ''}</code>.
           </span>
         </div>
       )}
+
+      <section className="identity">
+        {account ? (
+          <>
+            <div className="idrow">
+              <span className="idlabel">{walletLabel(account.kind)}</span>
+              <code className="idaddr">{short(account.address)}</code>
+            </div>
+            <div className="idrow">
+              <span className="idlabel">Arch key</span>
+              <code className="idaddr">{short(account.pubkeyHex)}</code>
+            </div>
+            <p className="idnote">
+              Your Taproot key signs the bet. Your own balance is escrowed on-chain.
+            </p>
+          </>
+        ) : wallets.length > 0 ? (
+          <>
+            <p className="idprompt">Connect a Taproot Bitcoin wallet to bet with your own key.</p>
+            <div className="idbuttons">
+              {wallets.map((w) => (
+                <button
+                  key={w}
+                  className="btn"
+                  onClick={() => handleConnect(w)}
+                  disabled={connecting}
+                >
+                  {connecting ? 'Connecting…' : `Connect ${walletLabel(w)}`}
+                </button>
+              ))}
+            </div>
+          </>
+        ) : (
+          <p className="idprompt">
+            No Bitcoin wallet found. Arch signs with secp256k1 BIP-322, so it needs a
+            Taproot wallet such as Unisat or Xverse. You can still try the demo below.
+          </p>
+        )}
+      </section>
 
       <main className="table">
         <div className="odds">
@@ -158,25 +245,53 @@ export default function App() {
           <span className="oddsep" aria-hidden="true" />
           <div className="odd">
             <span className="oddlabel">You win</span>
-            <span className="oddvalue win">{fmt(WAGER * 2)}</span>
+            <span className="oddvalue win">{fmt(WAGER * 2n)}</span>
           </div>
         </div>
-        <p className="unitnote">test sats, funded from the Arch faucet</p>
+        <p className="unitnote">test sats on Arch testnet</p>
 
-        <button className="flip" onClick={handlePlay} disabled={disabled}>
-          {phase === 'opening'
-            ? 'Placing your bet…'
-            : phase === 'flipping'
-              ? 'Flipping…'
-              : result !== null
+        <button
+          className="flip"
+          onClick={account ? playWithWallet : playDemo}
+          disabled={busy || backendOk === false}
+        >
+          {busy
+            ? stepLabel[phase]
+            : account
+              ? result !== null
                 ? 'Flip again'
-                : 'Flip the coin'}
+                : 'Sign and flip'
+              : result !== null
+                ? 'Flip again (demo)'
+                : 'Try the demo'}
         </button>
+
+        {account && !busy && (
+          <button className="ghostlink" onClick={playDemo} disabled={busy}>
+            or run a demo round without signing
+          </button>
+        )}
 
         <div className="stage" aria-live="polite">
           {busy && (
             <ol className="progress">
-              <li className={phase === 'opening' ? 'on' : 'done'}>Bet locked in escrow</li>
+              {mode === 'wallet' && (
+                <>
+                  <li className={phase === 'funding' ? 'on' : 'done'}>Arch account ready</li>
+                  <li
+                    className={phase === 'signing' ? 'on' : phase === 'funding' ? '' : 'done'}
+                  >
+                    Signed by your wallet
+                  </li>
+                </>
+              )}
+              <li
+                className={
+                  phase === 'opening' ? 'on' : phase === 'flipping' ? 'done' : ''
+                }
+              >
+                Bet locked in escrow
+              </li>
               <li className={phase === 'flipping' ? 'on' : ''}>Result settled on-chain</li>
             </ol>
           )}
@@ -186,16 +301,18 @@ export default function App() {
               <span className="verdicttitle">{result ? 'You won' : 'You lost'}</span>
               <span className="verdictsub">
                 {result
-                  ? `${fmt(WAGER * 2)} test sats released from escrow`
+                  ? `${fmt(WAGER * 2n)} test sats released from escrow`
                   : `${fmt(WAGER)} test sats went to the house`}
+                {mode === 'demo' && ' · demo round'}
               </span>
             </div>
           )}
 
           {!busy && result === null && !error && (
             <p className="hint">
-              Each round creates a fresh testnet key, locks your bet in an on-chain
-              escrow, then settles the outcome. No wallet needed, no real funds.
+              {account
+                ? 'Your wallet signs the bet, your key escrows it on-chain, then the house settles the outcome.'
+                : 'The demo uses a throwaway faucet key instead of yours. Connect a wallet to bet with your own.'}
             </p>
           )}
 
@@ -207,7 +324,7 @@ export default function App() {
         <section className="detail">
           <div className="detailhead">
             <h2>On-chain</h2>
-            <span className="src">read from Arch RPC</span>
+            <span className="src">{mode === 'wallet' ? 'your key' : 'demo key'}</span>
           </div>
           <dl className="facts">
             <div>
@@ -261,20 +378,6 @@ export default function App() {
       )}
 
       <footer className="footer">
-        {wallets.length > 0 &&
-          (walletAddr ? (
-            <p className="wallet">
-              Wallet connected: <code>{short(walletAddr)}</code>
-            </p>
-          ) : (
-            <p className="wallet">
-              {wallets.map((w) => (
-                <button key={w} className="link" onClick={() => handleConnect(w)}>
-                  Connect {w === 'unisat' ? 'Unisat' : 'Xverse'}
-                </button>
-              ))}
-            </p>
-          ))}
         <p>
           The house decides each outcome, because Arch has no on-chain randomness
           primitive. This is a testnet demo, not a trustless game.
