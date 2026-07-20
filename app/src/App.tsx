@@ -57,16 +57,24 @@ export default function App() {
     setWallets(detectWallets())
   }, [])
 
+  /**
+   * Re-read state from Arch RPC. Never throws: by the time this runs the
+   * settlement has already landed on-chain, so a failed *read* must not be
+   * allowed to discard a real result.
+   */
   async function refreshChain(p: string, sid: number) {
-    const [bal, sess] = await Promise.all([
-      getBalance(p),
-      readSession(p, BigInt(sid)),
-    ])
-    setBalance(bal)
-    if (sess) setOnChainStatus(sess.status)
-    const spda = sessionPda(p, BigInt(sid))
-    const vbal = await getBalance(hexOf(vaultPda(spda)))
-    setEscrowed(vbal)
+    try {
+      const [bal, sess] = await Promise.all([
+        getBalance(p),
+        readSession(p, BigInt(sid)),
+      ])
+      setBalance(bal)
+      if (sess) setOnChainStatus(sess.status)
+      const spda = sessionPda(p, BigInt(sid))
+      setEscrowed(await getBalance(hexOf(vaultPda(spda))))
+    } catch {
+      // Leave the last known values in place rather than blanking the card.
+    }
   }
 
   async function handlePlay() {
@@ -88,6 +96,12 @@ export default function App() {
       // 2. Settle. The coin flip happens off-chain; the house authority signs it.
       setPhase('flipping')
       const settled = await settleSession(opened.player, opened.session_id)
+
+      // Refresh on-chain state BEFORE revealing the result. Otherwise the result
+      // ("You lost") renders next to a stale session card still reading "Open"
+      // with the full stake escrowed, which looks like a bug.
+      await refreshChain(opened.player, opened.session_id)
+
       setResult(settled.player_won)
       setPhase('settled')
 
@@ -102,8 +116,6 @@ export default function App() {
           ...h,
         ].slice(0, 8),
       )
-
-      await refreshChain(opened.player, opened.session_id)
     } catch (e: any) {
       setError(e.message ?? String(e))
       setPhase('idle')
