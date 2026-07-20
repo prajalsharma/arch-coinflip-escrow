@@ -168,34 +168,33 @@ export default function App() {
 
       <section className="card wallet">
         <div className="cardhead">
-          <h2>Wallet</h2>
-          {walletAddr && <span className="pill ok">connected</span>}
+          <h2>Player</h2>
+          <span className="pill ok">Ready to play</span>
         </div>
 
+        <p className="muted">
+          Each round creates a fresh testnet key and funds it from the Arch faucet,
+          so you can play straight away — nothing to install, no real funds at risk.
+        </p>
+
         {walletAddr ? (
-          <div className="kv">
-            <span>Bitcoin address</span>
+          <div className="kv" style={{ marginTop: 12 }}>
+            <span>Bitcoin wallet</span>
             <code>{short(walletAddr)}</code>
           </div>
         ) : wallets.length > 0 ? (
-          <div className="row">
+          <div className="row" style={{ marginTop: 14 }}>
             {wallets.map((w) => (
               <button key={w} className="btn ghost" onClick={() => handleConnect(w)}>
                 Connect {w === 'unisat' ? 'Unisat' : 'Xverse'}
               </button>
             ))}
           </div>
-        ) : (
-          <p className="muted">
-            No Bitcoin wallet detected. Arch signs with secp256k1 / BIP-322, so it
-            needs a Taproot wallet like Unisat or Xverse — not Phantom.
-          </p>
-        )}
+        ) : null}
 
         <p className="note">
-          Demo mode below uses a fresh faucet-funded testnet key so you can play
-          without installing anything. Connecting a wallet shows your Bitcoin
-          identity; wallet-signed staking is not wired up yet.
+          Arch settles to Bitcoin and signs with Taproot wallets such as Unisat or
+          Xverse, so staking from your own wallet is the natural next step.
         </p>
       </section>
 
