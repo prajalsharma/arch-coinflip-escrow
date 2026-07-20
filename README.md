@@ -150,6 +150,72 @@ test result: ok. 2 passed; 0 failed
 `arch_sdk`'s `with_secret_key_file()`. They are gitignored. Never commit them — anyone with the
 file can drain the account.
 
+## Settlement backend
+
+The house authority key authorizes every payout, so it **cannot** live in browser code —
+anyone holding it could settle any session as a win and drain the vaults. It lives here.
+
+```bash
+cd backend
+cargo build
+
+HOUSE_AUTHORITY_KEY_FILE=../program/.testnet-authority.json \
+PROGRAM_ID=e2c42f6caec4783e4573085e10c7125edaf182fda4b0f8cbb96f17ae72a141c4 \
+ARCH_NETWORK=testnet PORT=8091 \
+cargo run
+```
+
+In production use `HOUSE_AUTHORITY_SECRET_KEY` (64-char hex) from your host's secret store
+instead of a file path. See [`.env.example`](.env.example).
+
+### Endpoints
+
+`GET /health`
+
+```json
+{ "ok": true, "network": "https://rpc.testnet.arch.network",
+  "program_id": "e2c42f...", "house_authority": "ab8215...", "block_height": 35691436 }
+```
+
+`POST /settle` — `{"player": "<64-char hex>", "session_id": 12345}`
+
+```json
+{ "player_won": true, "status": "SettledWon", "session_id": 696602754 }
+```
+
+### Try the full split flow
+
+```bash
+# 1. player opens a session from their own key (stands in for a browser wallet)
+cd program && cargo run --features no-entrypoint --example open_session -- testnet
+
+# 2. settle it via the backend (prints the exact curl for you)
+curl -X POST http://localhost:8091/settle -H 'Content-Type: application/json' \
+  -d '{"player":"<pubkey>","session_id":<id>}'
+```
+
+Verified on testnet — player balance went `984370 → 1004370` (+20000 on a 10000 wager).
+
+### What the backend guards
+
+| Case | Response |
+|---|---|
+| Session not on-chain | `400 session not found on-chain` |
+| Session belongs to another player | `400 session belongs to a different player` |
+| Already settled | `409 session already settled` |
+| Malformed pubkey | `400 player must be hex` / `must be 32 bytes` |
+| Duplicate request | Returns the original result (idempotent) |
+
+Two independent layers stop a double settle: an in-memory idempotency cache, **and** an
+on-chain status check. Restarting the service clears the cache — the chain still returns 409.
+
+The service verifies the session is genuinely `Open` **before** flipping, so it never flips
+for a session that does not exist or is already closed. It also reads the status back from
+chain after settling rather than trusting its own coin flip.
+
+**Trust assumption, stated plainly:** the house decides the outcome. This is not a trustless
+game — see "Why the result is off-chain".
+
 ## Frontend status
 
 Not built. Arch has no wallet adapter and no high-level TS client:

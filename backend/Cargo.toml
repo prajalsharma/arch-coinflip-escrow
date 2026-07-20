@@ -1,0 +1,24 @@
+[package]
+name = "coinflip_backend"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# The program crate MUST be pulled in with `no-entrypoint`, otherwise its SBF
+# entrypoint installs a bump allocator that segfaults this host process.
+coinflip_escrow = { path = "../program", features = ["no-entrypoint"] }
+
+arch_program = "0.6.7"
+arch_sdk = "0.6.7"
+bitcoin = "0.32.5"
+borsh = { version = "1.5.1", features = ["derive"] }
+
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+rand = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
