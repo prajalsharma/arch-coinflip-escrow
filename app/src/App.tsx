@@ -11,7 +11,6 @@ import {
   readSession,
   sessionPda,
   settleSession,
-  statusLabel,
   vaultPda,
   hexOf,
   type WalletKind,
@@ -19,13 +18,12 @@ import {
 
 const WAGER = 10_000
 
-type Phase = 'idle' | 'opening' | 'open' | 'flipping' | 'settled'
+type Phase = 'idle' | 'opening' | 'flipping' | 'settled'
 
 type HistoryRow = {
   sessionId: number
   player: string
   won: boolean
-  wager: number
 }
 
 const short = (s: string) => `${s.slice(0, 6)}…${s.slice(-4)}`
@@ -60,7 +58,7 @@ export default function App() {
 
   /**
    * Re-read state from Arch RPC. Never throws: by the time this runs the
-   * settlement has already landed on-chain, so a failed *read* must not be
+   * settlement has already landed on-chain, so a failed read must not be
    * allowed to discard a real result.
    */
   async function refreshChain(p: string, sid: number) {
@@ -74,7 +72,7 @@ export default function App() {
       const spda = sessionPda(p, BigInt(sid))
       setEscrowed(await getBalance(hexOf(vaultPda(spda))))
     } catch {
-      // Leave the last known values in place rather than blanking the card.
+      // Leave the last known values in place rather than blanking the panel.
     }
   }
 
@@ -85,37 +83,27 @@ export default function App() {
     setPhase('opening')
 
     try {
-      // 1. Open a session. The stake moves into the escrow vault PDA on-chain.
       const opened = await openDemoSession(WAGER)
       setPlayer(opened.player)
       setSessionId(opened.session_id)
       setBalance(opened.balance)
       setEscrowed(opened.escrowed)
       setOnChainStatus(0)
-      setPhase('open')
 
-      // 2. Settle. The coin flip happens off-chain; the house authority signs it.
       setPhase('flipping')
       const settled = await settleSession(opened.player, opened.session_id)
 
-      // Refresh on-chain state BEFORE revealing the result. Otherwise the result
-      // ("You lost") renders next to a stale session card still reading "Open"
-      // with the full stake escrowed, which looks like a bug.
+      // Refresh chain state before revealing the result, so the panel never
+      // shows "Open" next to "You lost".
       await refreshChain(opened.player, opened.session_id)
 
       setResult(settled.player_won)
       setPhase('settled')
-
       setHistory((h) =>
         [
-          {
-            sessionId: opened.session_id,
-            player: opened.player,
-            won: settled.player_won,
-            wager: WAGER,
-          },
+          { sessionId: opened.session_id, player: opened.player, won: settled.player_won },
           ...h,
-        ].slice(0, 8),
+        ].slice(0, 6),
       )
     } catch (e: any) {
       setError(e.message ?? String(e))
@@ -128,167 +116,172 @@ export default function App() {
     try {
       setWalletAddr(await connectWallet(kind))
     } catch (e: any) {
-      setError(`wallet connect failed: ${e.message ?? e}`)
+      setError(`Wallet connect failed: ${e.message ?? e}`)
     }
   }
 
   const busy = phase === 'opening' || phase === 'flipping'
+  const disabled = busy || backendOk === false
 
   return (
     <div className="page">
       <header className="header">
-        <div>
-          <h1>Arch Coin Flip</h1>
-          <p className="sub">
-            On-chain escrow on Bitcoin via Arch · results settled off-chain
-          </p>
+        <div className="brand">
+          <h1>Coin Flip</h1>
+          <p className="sub">Bitcoin escrow on Arch</p>
         </div>
-        <div className="netbox">
+        <div className="net">
           <span className={`dot ${backendOk ? 'ok' : backendOk === false ? 'bad' : ''}`} />
-          <div>
-            <div className="netname">Arch Testnet</div>
-            {blockHeight && <div className="netmeta">block {fmt(blockHeight)}</div>}
-          </div>
+          <span className="netname">Testnet</span>
+          {blockHeight && <span className="netblock">{fmt(blockHeight)}</span>}
         </div>
       </header>
 
       {backendOk === false && (
-        <div className="banner error">
-          <strong>Cannot reach the settlement backend</strong> at{' '}
-          <code>{BACKEND_URL}</code>.
-          <br />
-          Common causes: the backend isn't running; <code>VITE_BACKEND_URL</code>{' '}
-          is wrong or has a trailing slash; or the backend's{' '}
-          <code>ALLOWED_ORIGIN</code> doesn't exactly match{' '}
-          <code>{typeof window !== 'undefined' ? window.location.origin : ''}</code>.
-          <br />
-          Open the browser console — a CORS error there means it's the last one.
+        <div className="alert" role="alert">
+          <strong>Can’t reach the settlement service</strong>
+          <span>
+            Tried <code>{BACKEND_URL}</code>. Check that it is running, that{' '}
+            <code>VITE_BACKEND_URL</code> is correct, and that its{' '}
+            <code>ALLOWED_ORIGIN</code> matches{' '}
+            <code>{typeof window !== 'undefined' ? window.location.origin : ''}</code>.
+          </span>
         </div>
       )}
 
-      <section className="card wallet">
-        <div className="cardhead">
-          <h2>Player</h2>
-          <span className="pill ok">Ready to play</span>
-        </div>
-
-        <p className="muted">
-          Each round creates a fresh testnet key and funds it from the Arch faucet,
-          so you can play straight away — nothing to install, no real funds at risk.
-        </p>
-
-        {walletAddr ? (
-          <div className="kv" style={{ marginTop: 12 }}>
-            <span>Bitcoin wallet</span>
-            <code>{short(walletAddr)}</code>
+      <main className="table">
+        <div className="odds">
+          <div className="odd">
+            <span className="oddlabel">Your bet</span>
+            <span className="oddvalue">{fmt(WAGER)}</span>
           </div>
-        ) : wallets.length > 0 ? (
-          <div className="row" style={{ marginTop: 14 }}>
-            {wallets.map((w) => (
-              <button key={w} className="btn ghost" onClick={() => handleConnect(w)}>
-                Connect {w === 'unisat' ? 'Unisat' : 'Xverse'}
-              </button>
-            ))}
-          </div>
-        ) : null}
-
-        <p className="note">
-          Arch settles to Bitcoin and signs with Taproot wallets such as Unisat or
-          Xverse, so betting from your own wallet is the natural next step.
-        </p>
-      </section>
-
-      <section className="card play">
-        <div className="stakebox">
-          <div>
-            <div className="label">Your bet</div>
-            <div className="stake">{fmt(WAGER)}</div>
-            <div className="unit">test sats</div>
-          </div>
-          <div className="arrow">→</div>
-          <div>
-            <div className="label">You win</div>
-            <div className="stake win">{fmt(WAGER * 2)}</div>
-            <div className="unit">test sats</div>
+          <span className="oddsep" aria-hidden="true" />
+          <div className="odd">
+            <span className="oddlabel">You win</span>
+            <span className="oddvalue win">{fmt(WAGER * 2)}</span>
           </div>
         </div>
+        <p className="unitnote">test sats, funded from the Arch faucet</p>
 
-        <button className="btn primary" onClick={handlePlay} disabled={busy || backendOk === false}>
+        <button className="flip" onClick={handlePlay} disabled={disabled}>
           {phase === 'opening'
             ? 'Placing your bet…'
             : phase === 'flipping'
               ? 'Flipping…'
-              : 'Flip the coin'}
+              : result !== null
+                ? 'Flip again'
+                : 'Flip the coin'}
         </button>
 
-        {busy && (
-          <div className="steps">
-            <div className={`step ${phase === 'opening' ? 'active' : 'done'}`}>
-              1 · Bet locked in escrow on-chain
-            </div>
-            <div className={`step ${phase === 'flipping' ? 'active' : ''}`}>
-              2 · Coin flipped, result settled on-chain
-            </div>
-          </div>
-        )}
+        <div className="stage" aria-live="polite">
+          {busy && (
+            <ol className="progress">
+              <li className={phase === 'opening' ? 'on' : 'done'}>Bet locked in escrow</li>
+              <li className={phase === 'flipping' ? 'on' : ''}>Result settled on-chain</li>
+            </ol>
+          )}
 
-        {result !== null && phase === 'settled' && (
-          <div className={`result ${result ? 'won' : 'lost'}`}>
-            <div className="resulttitle">{result ? 'You won' : 'You lost'}</div>
-            <div className="resultsub">
-              {result
-                ? `${fmt(WAGER * 2)} test sats paid out from escrow`
-                : `${fmt(WAGER)} test sats went to the house`}
+          {!busy && result !== null && (
+            <div className={`verdict ${result ? 'won' : 'lost'}`}>
+              <span className="verdicttitle">{result ? 'You won' : 'You lost'}</span>
+              <span className="verdictsub">
+                {result
+                  ? `${fmt(WAGER * 2)} test sats released from escrow`
+                  : `${fmt(WAGER)} test sats went to the house`}
+              </span>
             </div>
-          </div>
-        )}
+          )}
 
-        {error && <div className="banner error">{error}</div>}
-      </section>
+          {!busy && result === null && !error && (
+            <p className="hint">
+              Each round creates a fresh testnet key, locks your bet in an on-chain
+              escrow, then settles the outcome. No wallet needed, no real funds.
+            </p>
+          )}
+
+          {error && <p className="errline">{error}</p>}
+        </div>
+      </main>
 
       {player && sessionId !== null && (
-        <section className="card">
-          <div className="cardhead">
-            <h2>On-chain state</h2>
-            {onChainStatus !== null && (
-              <span className={`pill ${onChainStatus === 1 ? 'ok' : onChainStatus === 2 ? 'bad' : ''}`}>
-                {statusLabel(onChainStatus)}
-              </span>
-            )}
+        <section className="detail">
+          <div className="detailhead">
+            <h2>On-chain</h2>
+            <span className="src">read from Arch RPC</span>
           </div>
-          <div className="kv"><span>Your key</span><code>{short(player)}</code></div>
-          <div className="kv"><span>Round</span><code>#{sessionId}</code></div>
-          <div className="kv"><span>Held in escrow</span><code>{fmt(escrowed)} test sats</code></div>
-          {balance !== null && (
-            <div className="kv"><span>Your balance</span><code>{fmt(balance)} test sats</code></div>
+          <dl className="facts">
+            <div>
+              <dt>Round</dt>
+              <dd>#{sessionId}</dd>
+            </div>
+            <div>
+              <dt>Key</dt>
+              <dd>{short(player)}</dd>
+            </div>
+            <div>
+              <dt>In escrow</dt>
+              <dd>{fmt(escrowed)}</dd>
+            </div>
+            <div>
+              <dt>Balance</dt>
+              <dd>{balance !== null ? fmt(balance) : '···'}</dd>
+            </div>
+          </dl>
+          {onChainStatus !== null && (
+            <div className={`chainstatus s${onChainStatus}`}>
+              {onChainStatus === 0
+                ? 'Escrow open'
+                : onChainStatus === 1
+                  ? 'Settled: player won'
+                  : 'Settled: house won'}
+            </div>
           )}
-          <p className="note">Read directly from Arch RPC, not from the backend.</p>
         </section>
       )}
 
       {history.length > 0 && (
-        <section className="card">
-          <div className="cardhead"><h2>Recent sessions</h2></div>
-          <div className="history">
+        <section className="detail">
+          <div className="detailhead">
+            <h2>Recent rounds</h2>
+            <span className="src">
+              {history.filter((h) => h.won).length}W / {history.filter((h) => !h.won).length}L
+            </span>
+          </div>
+          <ul className="rounds">
             {history.map((h) => (
-              <div key={h.sessionId} className="hrow">
-                <code>{short(h.player)}</code>
-                <span className="hid">#{h.sessionId}</span>
-                <span className={`pill ${h.won ? 'ok' : 'bad'}`}>
+              <li key={h.sessionId}>
+                <span className="rkey">{short(h.player)}</span>
+                <span className={`rres ${h.won ? 'won' : 'lost'}`}>
                   {h.won ? 'Won' : 'Lost'}
                 </span>
-              </div>
+              </li>
             ))}
-          </div>
+          </ul>
         </section>
       )}
 
       <footer className="footer">
-        <div className="kv"><span>Program</span><code>{short(PROGRAM_ID_HEX)}</code></div>
-        <div className="kv"><span>RPC</span><code>{ARCH_RPC_URL.replace('https://', '')}</code></div>
-        <p className="note">
-          The house decides the outcome — Arch has no on-chain randomness primitive.
-          This is a testnet MVP, not a trustless game.
+        {wallets.length > 0 &&
+          (walletAddr ? (
+            <p className="wallet">
+              Wallet connected: <code>{short(walletAddr)}</code>
+            </p>
+          ) : (
+            <p className="wallet">
+              {wallets.map((w) => (
+                <button key={w} className="link" onClick={() => handleConnect(w)}>
+                  Connect {w === 'unisat' ? 'Unisat' : 'Xverse'}
+                </button>
+              ))}
+            </p>
+          ))}
+        <p>
+          The house decides each outcome, because Arch has no on-chain randomness
+          primitive. This is a testnet demo, not a trustless game.
+        </p>
+        <p className="meta">
+          <span>Program {short(PROGRAM_ID_HEX)}</span>
+          <span>{ARCH_RPC_URL.replace('https://', '')}</span>
         </p>
       </footer>
     </div>

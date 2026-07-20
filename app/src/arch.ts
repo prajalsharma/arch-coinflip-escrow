@@ -42,7 +42,7 @@ export function hexOf(bytes: Uint8Array): string {
 }
 
 /**
- * PDA derivations — these mirror the program's seeds exactly.
+ * PDA derivations: these mirror the program seeds exactly.
  * Verified against the Rust implementation: the JS-derived config PDA reads the
  * same on-chain account the Rust program wrote.
  */
@@ -151,7 +151,7 @@ export async function health() {
 // Bitcoin wallet detection
 // ---------------------------------------------------------------------------
 //
-// Arch signs with secp256k1 / BIP-322 using a Bitcoin Taproot wallet — NOT ed25519,
+// Arch signs with secp256k1 / BIP-322 using a Bitcoin Taproot wallet, NOT ed25519,
 // so Phantom/Solflare do not apply and there is no wallet-adapter package.
 // There is no official Arch wallet adapter, so this talks to injected providers directly.
 
