@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   ARCH_RPC_URL,
+  BACKEND_URL,
   PROGRAM_ID_HEX,
   connectWallet,
   detectWallets,
@@ -153,9 +154,15 @@ export default function App() {
 
       {backendOk === false && (
         <div className="banner error">
-          Backend unreachable. Start it with{' '}
-          <code>cd backend && cargo run</code> — settlement needs the house
-          authority key, which cannot live in the browser.
+          <strong>Cannot reach the settlement backend</strong> at{' '}
+          <code>{BACKEND_URL}</code>.
+          <br />
+          Common causes: the backend isn't running; <code>VITE_BACKEND_URL</code>{' '}
+          is wrong or has a trailing slash; or the backend's{' '}
+          <code>ALLOWED_ORIGIN</code> doesn't exactly match{' '}
+          <code>{typeof window !== 'undefined' ? window.location.origin : ''}</code>.
+          <br />
+          Open the browser console — a CORS error there means it's the last one.
         </div>
       )}
 

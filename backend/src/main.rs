@@ -480,16 +480,59 @@ async fn main() {
     // production (e.g. https://your-app.vercel.app) so only your frontend can call
     // the settlement endpoint. Comma-separate for multiple origins.
     let cors = match std::env::var("ALLOWED_ORIGIN") {
-        Ok(origins) if !origins.trim().is_empty() => {
-            let list: Vec<HeaderValue> = origins
-                .split(',')
-                .filter_map(|o| o.trim().parse::<HeaderValue>().ok())
-                .collect();
-            tracing::info!(?origins, "CORS restricted");
-            CorsLayer::new()
-                .allow_origin(list)
-                .allow_methods([Method::GET, Method::POST])
-                .allow_headers([header::CONTENT_TYPE])
+        Ok(raw) if !raw.trim().is_empty() => {
+            let mut list: Vec<HeaderValue> = Vec::new();
+
+            for entry in raw.split(',') {
+                let mut o = entry.trim().to_string();
+                if o.is_empty() {
+                    continue;
+                }
+
+                // A browser Origin header is scheme://host[:port] — no trailing slash and
+                // no path. Pasting the URL straight from the address bar usually includes
+                // a trailing slash, which would silently match nothing. Fix it and say so
+                // rather than failing closed in a way that looks like the server is down.
+                if o.ends_with('/') {
+                    let fixed = o.trim_end_matches('/').to_string();
+                    tracing::warn!(given = %o, using = %fixed, "ALLOWED_ORIGIN had a trailing slash — stripped it");
+                    o = fixed;
+                }
+                if !o.starts_with("http://") && !o.starts_with("https://") {
+                    let fixed = format!("https://{o}");
+                    tracing::warn!(given = %o, using = %fixed, "ALLOWED_ORIGIN missing scheme — assuming https");
+                    o = fixed;
+                }
+                if let Some(idx) = o[8..].find('/').map(|i| i + 8) {
+                    let fixed = o[..idx].to_string();
+                    tracing::warn!(given = %o, using = %fixed, "ALLOWED_ORIGIN contained a path — trimmed to origin");
+                    o = fixed;
+                }
+
+                match o.parse::<HeaderValue>() {
+                    Ok(v) => {
+                        tracing::info!(origin = %o, "CORS allowing origin");
+                        list.push(v);
+                    }
+                    Err(_) => {
+                        tracing::error!(origin = %o, "ALLOWED_ORIGIN entry is not a valid header value — IGNORED");
+                    }
+                }
+            }
+
+            if list.is_empty() {
+                // Failing closed here would look exactly like the backend being down.
+                tracing::error!(
+                    "ALLOWED_ORIGIN was set but no valid origin parsed — falling back to OPEN CORS \
+                     so the app still works. Fix the value; expected form: https://your-app.vercel.app"
+                );
+                CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any)
+            } else {
+                CorsLayer::new()
+                    .allow_origin(list)
+                    .allow_methods([Method::GET, Method::POST])
+                    .allow_headers([header::CONTENT_TYPE])
+            }
         }
         _ => {
             tracing::warn!("ALLOWED_ORIGIN not set — CORS is open to any origin (dev only)");
