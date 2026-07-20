@@ -1,0 +1,21 @@
+# Keep the build context small, and make sure no private key can ever reach an image.
+#
+# These key files are gitignored so they are absent on a Railway/CI build — but they DO
+# exist locally, and a plain `docker build .` would otherwise copy them into the context.
+# A bare `*.json` does NOT match them (dotfiles in subdirectories), hence the explicit list.
+**/.program.json
+**/.authority.json
+**/.testnet-authority.json
+**/.testnet-program.json
+**/*-keypair.json
+**/.env
+**/.env.*
+
+# Not needed to build the backend
+app/
+docs/
+docker/
+**/target/
+**/node_modules/
+.git/
+*.md

@@ -20,24 +20,35 @@ Flip button stays disabled. **Deploy the backend first.**
 
 ## Step 1 — Backend (do this first)
 
-A `backend/Dockerfile` is included. Build context must be the **repo root**, not `backend/`,
-because the backend depends on the `program` crate by path.
+The `Dockerfile` lives at the **repo root** (not in `backend/`) for two reasons: the backend
+depends on the `program` crate by path so the build context must include both, and Railway's
+auto-detector only looks at the root.
 
-### Railway
+### Railway — no build settings needed
 
 1. New Project → Deploy from GitHub → pick this repo
-2. Settings → **Root Directory: `/`** (leave at repo root)
-3. Settings → **Dockerfile Path: `backend/Dockerfile`**
-4. Add the variables below
-5. Deploy, then Settings → Networking → **Generate Domain**
+2. Add the variables below
+3. Deploy, then Settings → Networking → **Generate Domain**
+
+That's it. Railway sees the root `Dockerfile` and uses it. `railway.json` pins
+`builder: DOCKERFILE` explicitly so it can't fall back to auto-detection.
+
+> **If you see `Railpack could not determine how to build the app`**, Railway is trying to
+> auto-detect instead of using Docker. That happens when the Dockerfile isn't at the root, or
+> when a stale service was created before it was. Fix: redeploy, or set
+> Settings → Build → Builder = **Dockerfile**.
 
 ### Fly.io
 
 ```bash
-fly launch --dockerfile backend/Dockerfile --no-deploy
+fly launch --dockerfile Dockerfile --no-deploy
 fly secrets set HOUSE_AUTHORITY_SECRET_KEY=<hex>
 fly deploy
 ```
+
+### Render
+
+New → Web Service → **Runtime: Docker**. Dockerfile path `./Dockerfile`, context `.`.
 
 ### Environment variables
 
