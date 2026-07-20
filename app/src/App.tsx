@@ -42,6 +42,7 @@ export default function App() {
   const [backendOk, setBackendOk] = useState<boolean | null>(null)
   const [blockHeight, setBlockHeight] = useState<number | null>(null)
 
+  const [programMismatch, setProgramMismatch] = useState<string | null>(null)
   const [wallets, setWallets] = useState<WalletKind[]>([])
   const [account, setAccount] = useState<WalletAccount | null>(null)
   const [connecting, setConnecting] = useState(false)
@@ -60,6 +61,13 @@ export default function App() {
       .then((h) => {
         setBackendOk(true)
         setBlockHeight(h.block_height ?? null)
+        // The backend derives session PDAs from ITS program id. If it differs from
+        // ours, every session we open is invisible to it and settlement fails with
+        // "session not found on-chain". Catch it up front rather than mid-round.
+        const theirs = String(h.program_id ?? '').toLowerCase()
+        if (theirs && theirs !== PROGRAM_ID_HEX.toLowerCase()) {
+          setProgramMismatch(theirs)
+        }
       })
       .catch(() => setBackendOk(false))
     setWallets(detectWallets())
@@ -201,6 +209,19 @@ export default function App() {
         </div>
       )}
 
+      {programMismatch && (
+        <div className="alert" role="alert">
+          <strong>Frontend and backend are on different programs</strong>
+          <span>
+            This app uses <code>{PROGRAM_ID_HEX.slice(0, 12)}…</code> but the settlement
+            service uses <code>{programMismatch.slice(0, 12)}…</code>. Sessions opened here
+            are invisible to it, so settlement fails with “session not found on-chain”.
+            Set both <code>VITE_PROGRAM_ID</code> and the backend’s <code>PROGRAM_ID</code>
+            to the same value, then redeploy both.
+          </span>
+        </div>
+      )}
+
       <section className="identity">
         {account ? (
           <>
@@ -257,7 +278,7 @@ export default function App() {
         <button
           className="flip"
           onClick={account ? playWithWallet : playDemo}
-          disabled={busy || backendOk === false || (!account && !DEMO_ENABLED)}
+          disabled={busy || backendOk === false || programMismatch !== null || (!account && !DEMO_ENABLED)}
         >
           {busy
             ? stepLabel[phase]

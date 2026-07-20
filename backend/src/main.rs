@@ -371,9 +371,17 @@ fn settle_blocking(
     // --- Verify the session exists and is genuinely Open, BEFORE flipping. ---
     // Without this we would happily flip a coin for a session that does not exist,
     // or one already settled, and only discover it when the chain rejects us.
-    let session_account = client
-        .read_account_info(session_pda)
-        .map_err(|_| SettleError::BadRequest("session not found on-chain".into()))?;
+    let session_account = client.read_account_info(session_pda).map_err(|_| {
+        // Name the program and the derived PDA. The usual cause is that the frontend and
+        // this service are configured with different PROGRAM_IDs, so the session was
+        // opened under a different program and this derivation points at nothing.
+        SettleError::BadRequest(format!(
+            "session not found on-chain. Derived session PDA {} for player {} \
+             (session_id {}) under program {}. If the frontend uses a different \
+             PROGRAM_ID, sessions it opens are invisible here.",
+            session_pda, player_pk, session_id, program_id
+        ))
+    })?;
 
     if session_account.data.len() < GameSession::LEN {
         return Err(SettleError::BadRequest("session account malformed".into()));
