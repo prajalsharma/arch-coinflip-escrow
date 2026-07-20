@@ -6,8 +6,14 @@
  */
 import { PubkeyUtil, RpcConnection } from '@arch-network/arch-sdk'
 
-export const BACKEND_URL =
+/**
+ * Trailing slashes are stripped: pasting a URL from a dashboard almost always
+ * includes one, and `${BACKEND_URL}/health` would then request `...app//health`,
+ * which 404s and looks exactly like the backend being down.
+ */
+export const BACKEND_URL = (
   import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:8091'
+).replace(/\/+$/, '')
 export const ARCH_RPC_URL =
   import.meta.env.VITE_ARCH_RPC_URL ?? 'https://rpc.testnet.arch.network'
 export const PROGRAM_ID_HEX =

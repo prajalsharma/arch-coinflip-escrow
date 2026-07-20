@@ -194,28 +194,28 @@ export default function App() {
 
         <p className="note">
           Arch settles to Bitcoin and signs with Taproot wallets such as Unisat or
-          Xverse, so staking from your own wallet is the natural next step.
+          Xverse, so betting from your own wallet is the natural next step.
         </p>
       </section>
 
       <section className="card play">
         <div className="stakebox">
           <div>
-            <div className="label">Stake</div>
+            <div className="label">Your bet</div>
             <div className="stake">{fmt(WAGER)}</div>
-            <div className="unit">lamports</div>
+            <div className="unit">test sats</div>
           </div>
           <div className="arrow">→</div>
           <div>
-            <div className="label">Payout if you win</div>
+            <div className="label">You win</div>
             <div className="stake win">{fmt(WAGER * 2)}</div>
-            <div className="unit">lamports</div>
+            <div className="unit">test sats</div>
           </div>
         </div>
 
         <button className="btn primary" onClick={handlePlay} disabled={busy || backendOk === false}>
           {phase === 'opening'
-            ? 'Escrowing stake…'
+            ? 'Placing your bet…'
             : phase === 'flipping'
               ? 'Flipping…'
               : 'Flip the coin'}
@@ -224,10 +224,10 @@ export default function App() {
         {busy && (
           <div className="steps">
             <div className={`step ${phase === 'opening' ? 'active' : 'done'}`}>
-              1 · Stake escrowed in vault PDA
+              1 · Bet locked in escrow on-chain
             </div>
             <div className={`step ${phase === 'flipping' ? 'active' : ''}`}>
-              2 · House settles result on-chain
+              2 · Coin flipped, result settled on-chain
             </div>
           </div>
         )}
@@ -237,8 +237,8 @@ export default function App() {
             <div className="resulttitle">{result ? 'You won' : 'You lost'}</div>
             <div className="resultsub">
               {result
-                ? `${fmt(WAGER * 2)} lamports paid from escrow + house`
-                : `${fmt(WAGER)} lamports went to the house`}
+                ? `${fmt(WAGER * 2)} test sats paid out from escrow`
+                : `${fmt(WAGER)} test sats went to the house`}
             </div>
           </div>
         )}
@@ -256,11 +256,11 @@ export default function App() {
               </span>
             )}
           </div>
-          <div className="kv"><span>Player</span><code>{short(player)}</code></div>
-          <div className="kv"><span>Session ID</span><code>{sessionId}</code></div>
-          <div className="kv"><span>Escrow vault</span><code>{fmt(escrowed)} lamports</code></div>
+          <div className="kv"><span>Your key</span><code>{short(player)}</code></div>
+          <div className="kv"><span>Round</span><code>#{sessionId}</code></div>
+          <div className="kv"><span>Held in escrow</span><code>{fmt(escrowed)} test sats</code></div>
           {balance !== null && (
-            <div className="kv"><span>Player balance</span><code>{fmt(balance)} lamports</code></div>
+            <div className="kv"><span>Your balance</span><code>{fmt(balance)} test sats</code></div>
           )}
           <p className="note">Read directly from Arch RPC, not from the backend.</p>
         </section>
