@@ -195,8 +195,25 @@ export async function connectWallet(kind: WalletKind): Promise<string> {
  * Layout: authority(32) | house_treasury(32) | min_wager(8) | max_wager(8) | bump(1)
  */
 export async function readHouseTreasury(): Promise<Uint8Array> {
-  const info: any = await rpc.readAccountInfo(configPda())
+  let info: any
+  try {
+    info = await rpc.readAccountInfo(configPda())
+  } catch {
+    throw new Error(
+      `No config account for program ${PROGRAM_ID_HEX.slice(0, 8)}… on ${ARCH_RPC_URL}. ` +
+        'The program is deployed but InitializeConfig has not been run.',
+    )
+  }
+
   const data = Uint8Array.from(info.data)
-  if (data.length < 64) throw new Error('Config account is too small; program may be out of date')
+  // Config is 81 bytes since house_treasury was added. A 49-byte account is the
+  // pre-security layout, which means VITE_PROGRAM_ID points at an older deployment.
+  if (data.length < 64) {
+    throw new Error(
+      `Config for program ${PROGRAM_ID_HEX.slice(0, 8)}… is ${data.length} bytes, expected 81. ` +
+        'VITE_PROGRAM_ID points at an outdated deployment. Set it to ' +
+        '8ea69ca483247ded86a152bc809e05caf1f0326c604877f8071947420053c635 and redeploy.',
+    )
+  }
   return data.slice(32, 64)
 }
