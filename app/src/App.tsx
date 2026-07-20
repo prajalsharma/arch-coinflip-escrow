@@ -408,7 +408,13 @@ export default function App() {
           <ul className="rounds">
             {history.map((h) => (
               <li key={h.sessionId}>
-                <span className="rkey">{short(h.player)}</span>
+                {/* The round id is what differs between rows. In wallet mode the player
+                    key is the same every round by definition, so showing it here just
+                    repeated one string down the list. */}
+                <span className="rkey">#{h.sessionId}</span>
+                <span className={`rdelta ${h.won ? 'won' : 'lost'}`}>
+                  {h.won ? `+${fmt(WAGER)}` : `-${fmt(WAGER)}`}
+                </span>
                 <span className={`rres ${h.won ? 'won' : 'lost'}`}>
                   {h.won ? 'Won' : 'Lost'}
                 </span>
