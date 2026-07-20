@@ -140,6 +140,21 @@ struct ErrorResponse {
     error: String,
 }
 
+#[derive(Deserialize)]
+struct DemoOpenRequest {
+    /// Optional; defaults to the config's min wager range midpoint.
+    wager: Option<u64>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+struct DemoOpenResponse {
+    player: String,
+    session_id: u64,
+    wager: u64,
+    escrowed: u64,
+    balance: u64,
+}
+
 #[derive(Serialize)]
 struct HealthResponse {
     ok: bool,
@@ -214,6 +229,110 @@ enum SettleError {
     BadRequest(String),
     Conflict(String),
     Internal(String),
+}
+
+/// DEMO MODE. Creates a throwaway player, funds it from the faucet, and opens a session
+/// on its behalf — so the game is playable with no wallet extension installed.
+///
+/// This is a TESTNET CONVENIENCE, not how a real player should work. The server holds the
+/// throwaway key for the length of one request; a real player signs with their own wallet
+/// and the server never sees their key. Disable with DEMO_MODE=off.
+async fn demo_open(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<DemoOpenRequest>,
+) -> Result<Json<DemoOpenResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let bad = |c: StatusCode, m: String| (c, Json(ErrorResponse { error: m }));
+
+    if env_or("DEMO_MODE", "on") != "on" {
+        return Err(bad(StatusCode::FORBIDDEN, "demo mode disabled".into()));
+    }
+
+    let wager = req.wager.unwrap_or(10_000);
+    let state2 = state.clone();
+
+    let result = tokio::task::spawn_blocking(move || demo_open_blocking(state2, wager))
+        .await
+        .map_err(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, format!("task panic: {e}")))?;
+
+    match result {
+        Ok(r) => Ok(Json(r)),
+        Err(SettleError::BadRequest(m)) => Err(bad(StatusCode::BAD_REQUEST, m)),
+        Err(SettleError::Conflict(m)) => Err(bad(StatusCode::CONFLICT, m)),
+        Err(SettleError::Internal(m)) => Err(bad(StatusCode::INTERNAL_SERVER_ERROR, m)),
+    }
+}
+
+fn demo_open_blocking(
+    state: Arc<AppState>,
+    wager: u64,
+) -> Result<DemoOpenResponse, SettleError> {
+    use arch_sdk::generate_new_keypair;
+
+    let client = ArchRpcClient::new(&state.config);
+    let program_id = state.program_id;
+
+    let (player_kp, player_pk, _) = generate_new_keypair(state.config.network);
+    client
+        .create_and_fund_account_with_faucet(&player_kp)
+        .map_err(|e| SettleError::Internal(format!("faucet: {e}")))?;
+
+    // Session id derived from the player key so it is unique without extra state.
+    let session_id = u64::from_le_bytes(player_pk.as_ref()[..8].try_into().unwrap()) & 0x0000_FFFF_FFFF_FFFF;
+
+    let (config_pda, _) = Pubkey::find_program_address(&[b"config"], &program_id);
+    let (session_pda, _) = Pubkey::find_program_address(
+        &[b"session", player_pk.as_ref(), &session_id.to_le_bytes()],
+        &program_id,
+    );
+    let (vault_pda, _) =
+        Pubkey::find_program_address(&[b"vault", session_pda.as_ref()], &program_id);
+
+    let ix = Instruction {
+        program_id,
+        accounts: vec![
+            AccountMeta::new(player_pk, true),
+            AccountMeta::new_readonly(config_pda, false),
+            AccountMeta::new(session_pda, false),
+            AccountMeta::new(vault_pda, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ],
+        data: borsh::to_vec(&EscrowInstruction::OpenSession { session_id, wager })
+            .map_err(|e| SettleError::Internal(format!("serialize: {e}")))?,
+    };
+
+    let blockhash = client
+        .get_best_finalized_block_hash()
+        .map_err(|e| SettleError::Internal(format!("blockhash: {e}")))?;
+
+    let tx = build_and_sign_transaction(
+        ArchMessage::new(&[ix], Some(player_pk), blockhash),
+        vec![player_kp],
+        state.config.network,
+    )
+    .map_err(|e| SettleError::Internal(format!("sign: {e}")))?;
+
+    let txids = client
+        .send_transactions(vec![tx])
+        .map_err(|e| SettleError::Internal(format!("send: {e}")))?;
+    let processed = client
+        .wait_for_processed_transactions(txids)
+        .map_err(|e| SettleError::Internal(format!("confirm: {e}")))?;
+
+    match &processed[0].status {
+        Status::Processed => {}
+        other => return Err(SettleError::Internal(format!("open failed: {other:?}"))),
+    }
+
+    let escrowed = client.read_account_info(vault_pda).map(|a| a.lamports).unwrap_or(0);
+    let balance = client.read_account_info(player_pk).map(|a| a.lamports).unwrap_or(0);
+
+    Ok(DemoOpenResponse {
+        player: player_pk.to_string(),
+        session_id,
+        wager,
+        escrowed,
+        balance,
+    })
 }
 
 /// The actual on-chain work. Blocking, so it runs on a blocking thread.
@@ -362,6 +481,7 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health))
         .route("/settle", post(settle))
+        .route("/demo/open", post(demo_open))
         .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
         .with_state(state);
 

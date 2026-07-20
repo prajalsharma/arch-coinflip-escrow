@@ -27,3 +27,6 @@ dist/
 .DS_Store
 .testnet-authority.json
 .testnet-program.json
+app/node_modules/
+app/dist/
+app/tsconfig.tsbuildinfo

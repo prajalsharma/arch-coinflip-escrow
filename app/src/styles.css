@@ -1,0 +1,203 @@
+:root {
+  --bg: #0c0c0f;
+  --panel: #141419;
+  --panel2: #1b1b22;
+  --line: #26262f;
+  --text: #ececf1;
+  --muted: #8b8b99;
+  --accent: #f7931a;      /* bitcoin orange */
+  --win: #3fb950;
+  --lose: #f85149;
+  --radius: 14px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, -apple-system, "Segoe UI", Inter, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; }
+
+.page {
+  max-width: 620px;
+  margin: 0 auto;
+  padding: 40px 20px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ---------- header ---------- */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 4px;
+}
+.header h1 {
+  margin: 0;
+  font-size: 26px;
+  letter-spacing: -0.02em;
+}
+.sub { margin: 6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+
+.netbox {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 8px 14px 8px 11px;
+  flex-shrink: 0;
+}
+.netname { font-size: 12px; font-weight: 600; }
+.netmeta { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--muted); flex-shrink: 0;
+}
+.dot.ok { background: var(--win); box-shadow: 0 0 0 3px rgba(63,185,80,.15); }
+.dot.bad { background: var(--lose); box-shadow: 0 0 0 3px rgba(248,81,73,.15); }
+
+/* ---------- cards ---------- */
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+.cardhead {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 14px;
+}
+.cardhead h2 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: .01em; }
+
+.kv {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 9px 0; border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.kv:last-of-type { border-bottom: none; }
+.kv > span { color: var(--muted); }
+
+.muted { color: var(--muted); font-size: 13px; line-height: 1.6; margin: 0; }
+.note { color: var(--muted); font-size: 12px; line-height: 1.6; margin: 12px 0 0; }
+
+.pill {
+  font-size: 11px; font-weight: 600; padding: 3px 9px;
+  border-radius: 999px; background: var(--panel2); color: var(--muted);
+  border: 1px solid var(--line);
+}
+.pill.ok { color: var(--win); border-color: rgba(63,185,80,.3); background: rgba(63,185,80,.08); }
+.pill.bad { color: var(--lose); border-color: rgba(248,81,73,.3); background: rgba(248,81,73,.08); }
+
+.row { display: flex; gap: 10px; flex-wrap: wrap; }
+
+/* ---------- stake ---------- */
+.stakebox {
+  display: flex; align-items: center; justify-content: space-between;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 18px 22px;
+  margin-bottom: 16px;
+}
+.label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.stake {
+  font-size: 26px; font-weight: 650; margin-top: 4px;
+  font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
+}
+.stake.win { color: var(--win); }
+.unit { font-size: 11px; color: var(--muted); margin-top: 1px; }
+.arrow { color: var(--muted); font-size: 18px; }
+
+/* ---------- buttons ---------- */
+.btn {
+  border: 1px solid var(--line);
+  background: var(--panel2);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 11px 16px;
+  font-size: 14px;
+  font-weight: 550;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background .15s, border-color .15s, opacity .15s;
+}
+.btn:hover:not(:disabled) { border-color: #3a3a46; background: #22222a; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.btn.primary {
+  width: 100%;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #17130c;
+  font-weight: 650;
+  padding: 14px;
+  font-size: 15px;
+}
+.btn.primary:hover:not(:disabled) { background: #ffa733; border-color: #ffa733; }
+.btn.ghost { background: transparent; }
+
+/* ---------- steps ---------- */
+.steps { margin-top: 14px; display: flex; flex-direction: column; gap: 7px; }
+.step {
+  font-size: 12px; color: var(--muted);
+  padding: 9px 12px; border-radius: 8px;
+  background: var(--panel2); border: 1px solid var(--line);
+}
+.step.active { color: var(--accent); border-color: rgba(247,147,26,.35); }
+.step.done { color: var(--win); }
+
+/* ---------- result ---------- */
+.result {
+  margin-top: 16px; padding: 18px; border-radius: 12px; text-align: center;
+  border: 1px solid var(--line); background: var(--panel2);
+}
+.result.won { border-color: rgba(63,185,80,.35); background: rgba(63,185,80,.07); }
+.result.lost { border-color: rgba(248,81,73,.3); background: rgba(248,81,73,.06); }
+.resulttitle { font-size: 20px; font-weight: 650; letter-spacing: -0.01em; }
+.result.won .resulttitle { color: var(--win); }
+.result.lost .resulttitle { color: var(--lose); }
+.resultsub { font-size: 12px; color: var(--muted); margin-top: 5px; }
+
+/* ---------- banner ---------- */
+.banner {
+  margin-top: 14px; padding: 12px 14px; border-radius: 10px;
+  font-size: 13px; line-height: 1.55;
+}
+.banner.error {
+  background: rgba(248,81,73,.08);
+  border: 1px solid rgba(248,81,73,.3);
+  color: #ffb4ae;
+}
+.banner code { background: rgba(0,0,0,.3); padding: 2px 6px; border-radius: 5px; }
+
+/* ---------- history ---------- */
+.history { display: flex; flex-direction: column; }
+.hrow {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 13px;
+}
+.hrow:last-child { border-bottom: none; }
+.hid { color: var(--muted); font-size: 12px; margin-left: auto; font-variant-numeric: tabular-nums; }
+
+/* ---------- footer ---------- */
+.footer {
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+  margin-top: 4px;
+}
+
+@media (max-width: 480px) {
+  .header { flex-direction: column; }
+  .stakebox { padding: 16px; }
+  .stake { font-size: 22px; }
+}

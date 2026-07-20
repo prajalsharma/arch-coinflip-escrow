@@ -216,7 +216,75 @@ chain after settling rather than trusting its own coin flip.
 **Trust assumption, stated plainly:** the house decides the outcome. This is not a trustless
 game — see "Why the result is off-chain".
 
-## Frontend status
+## Frontend
+
+A one-page React app. Playable on Arch testnet with **no wallet install required**.
+
+```bash
+# terminal 1 — settlement backend
+cd backend
+HOUSE_AUTHORITY_KEY_FILE=../program/.testnet-authority.json \
+PROGRAM_ID=e2c42f6caec4783e4573085e10c7125edaf182fda4b0f8cbb96f17ae72a141c4 \
+ARCH_NETWORK=testnet PORT=8091 cargo run
+
+# terminal 2 — frontend
+cd app
+npm install
+npm run dev        # http://localhost:5173
+```
+
+Click **Flip the coin**. The app opens a real session on testnet, escrows the stake in
+a vault PDA, settles via the backend, and reads the result back from Arch RPC.
+
+### How it splits work
+
+| Operation | Where |
+|---|---|
+| Derive PDAs (`config`, `session`, `vault`) | Browser — `PubkeyUtil.findProgramAddress` |
+| Read balances + session status | Browser — direct Arch RPC |
+| Open session (stake escrow) | Backend (demo mode) |
+| Settle (needs house authority key) | Backend — **never** the browser |
+
+On-chain state shown in the UI is read straight from Arch RPC, not echoed back by the
+backend, so it reflects what actually landed on chain.
+
+### ⚠️ The official npm SDK is broken
+
+`@arch-network/arch-sdk@0.0.27` — the package the official docs tell you to install —
+**publishes no code**. Its tarball contains only LICENSE, README.md and package.json;
+`main` points at a `dist/index.js` that does not exist, so importing it throws
+`MODULE_NOT_FOUND`.
+
+This app therefore uses **`@saturnbtcio/arch-sdk@0.0.24`**, the older package the official
+one was forked from. It works and ships a real `dist/`.
+
+Verified working from that SDK: `PubkeyUtil.findProgramAddress` (derives byte-identical
+PDAs to the Rust program — checked against the live on-chain Config account),
+`RpcConnection.readAccountInfo`, `MessageUtil.hash`, `SignatureUtil.adjustSignature`.
+
+### Wallet connect
+
+Arch signs with **secp256k1 / BIP-322** using a Bitcoin Taproot wallet — not ed25519 —
+so Phantom and `@solana/wallet-adapter` do not apply, and no official Arch wallet adapter
+exists. The app detects and connects **Unisat** and **Xverse** directly via their injected
+providers, and shows the connected Bitcoin address.
+
+**Wallet-signed staking is not wired up.** Opening a session from a wallet requires full
+BIP-322 transaction signing in the browser: hash the message with
+`SanitizedMessageUtil.hash`, pass the hex to `wallet.signMessage(hash, 'bip322-simple')`,
+base64-decode, then strip the witness prefix via `SignatureUtil.adjustSignature`
+(66 bytes → strip 2; 67 → strip 2 and trailing sighash byte; 64 → as-is).
+
+Reference implementations, if you want to finish it:
+`Arch-Network/arch-wallet-hub` (`packages/arch-swap-engine/src/lib/arch/signing.ts` — the
+only one doing real witness-stack parsing rather than guessing byte offsets) and
+`Arch-Network/arch-ide` (`frontend/src/utils/client-transaction-signer.ts` — full flow
+including `recent_blockhash`, uses `version: 0`).
+
+Be aware these repos disagree on how to extract the signature, which suggests the authors
+never fully converged. Untested here — no browser wallet was available to verify against.
+
+## Frontend status (background)
 
 Not built. Arch has no wallet adapter and no high-level TS client:
 
