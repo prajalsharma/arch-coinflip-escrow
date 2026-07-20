@@ -248,17 +248,20 @@ a vault PDA, settles via the backend, and reads the result back from Arch RPC.
 On-chain state shown in the UI is read straight from Arch RPC, not echoed back by the
 backend, so it reflects what actually landed on chain.
 
-### ⚠️ The official npm SDK is broken
+### ⚠️ Pin the SDK to 0.0.26 — `latest` is a broken publish
 
-`@arch-network/arch-sdk@0.0.27` — the package the official docs tell you to install —
-**publishes no code**. Its tarball contains only LICENSE, README.md and package.json;
-`main` points at a `dist/index.js` that does not exist, so importing it throws
-`MODULE_NOT_FOUND`.
+`@arch-network/arch-sdk@0.0.27` (the `latest` tag) **publishes no code**. Its tarball is
+only LICENSE, README.md and package.json — 3 files, 15 kB — and `main` points at a
+`dist/index.js` that does not exist, so importing it throws `MODULE_NOT_FOUND`.
 
-This app therefore uses **`@saturnbtcio/arch-sdk@0.0.24`**, the older package the official
-one was forked from. It works and ships a real `dist/`.
+`0.0.26` and `0.0.25` are fine (7 files, ~250 kB, full `dist/`). This app pins **`0.0.26`
+exactly**. Do not use a caret range without checking: `^0.0.26` happens to be safe because
+npm's caret does not cross a `0.0.x` minor, but pinning is clearer about why.
 
-Verified working from that SDK: `PubkeyUtil.findProgramAddress` (derives byte-identical
+`@saturnbtcio/arch-sdk@0.0.24` — the package the official one was forked from — also works
+and is a viable fallback.
+
+Verified working from `0.0.26`: `PubkeyUtil.findProgramAddress` (derives byte-identical
 PDAs to the Rust program — checked against the live on-chain Config account),
 `RpcConnection.readAccountInfo`, `MessageUtil.hash`, `SignatureUtil.adjustSignature`.
 
@@ -281,8 +284,14 @@ only one doing real witness-stack parsing rather than guessing byte offsets) and
 `Arch-Network/arch-ide` (`frontend/src/utils/client-transaction-signer.ts` — full flow
 including `recent_blockhash`, uses `version: 0`).
 
-Be aware these repos disagree on how to extract the signature, which suggests the authors
-never fully converged. Untested here — no browser wallet was available to verify against.
+Be aware these repos disagree on how to extract the signature. That divergence has a cause:
+a P2TR `bip322-simple` signature is 66 bytes, but a **P2WPKH one is 107 bytes with two
+witness items** and will throw in `adjustSignature`, which accepts only 64/66/67. Fixed-offset
+slicing only works if you already know the address is Taproot — so parse the witness stack,
+and require a Taproot account.
+
+Untested here: no browser wallet was available to verify against. Get one transaction
+accepted end-to-end before building on top of this.
 
 ## Frontend status (background)
 

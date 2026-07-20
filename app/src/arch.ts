@@ -4,7 +4,7 @@
  * Reads go straight to the Arch RPC so the UI shows real on-chain state.
  * Writes go through the backend, because settlement needs the house authority key.
  */
-import { PubkeyUtil, RpcConnection } from '@saturnbtcio/arch-sdk'
+import { PubkeyUtil, RpcConnection } from '@arch-network/arch-sdk'
 
 export const BACKEND_URL =
   import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:8091'
