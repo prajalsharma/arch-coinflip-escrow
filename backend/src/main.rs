@@ -25,7 +25,7 @@ use arch_sdk::blocking::ArchRpcClient;
 use arch_sdk::{build_and_sign_transaction, Config, Status};
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{header, HeaderValue, Method, StatusCode},
     routing::{get, post},
     Json, Router,
 };
@@ -476,13 +476,32 @@ async fn main() {
         settled: Mutex::new(HashMap::new()),
     });
 
-    // CORS is permissive so a local frontend can call this during development.
-    // Restrict `allow_origin` to your real domain before exposing this publicly.
+    // CORS. Defaults to permissive for local development, but set ALLOWED_ORIGIN in
+    // production (e.g. https://your-app.vercel.app) so only your frontend can call
+    // the settlement endpoint. Comma-separate for multiple origins.
+    let cors = match std::env::var("ALLOWED_ORIGIN") {
+        Ok(origins) if !origins.trim().is_empty() => {
+            let list: Vec<HeaderValue> = origins
+                .split(',')
+                .filter_map(|o| o.trim().parse::<HeaderValue>().ok())
+                .collect();
+            tracing::info!(?origins, "CORS restricted");
+            CorsLayer::new()
+                .allow_origin(list)
+                .allow_methods([Method::GET, Method::POST])
+                .allow_headers([header::CONTENT_TYPE])
+        }
+        _ => {
+            tracing::warn!("ALLOWED_ORIGIN not set — CORS is open to any origin (dev only)");
+            CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any)
+        }
+    };
+
     let app = Router::new()
         .route("/health", get(health))
         .route("/settle", post(settle))
         .route("/demo/open", post(demo_open))
-        .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
+        .layer(cors)
         .with_state(state);
 
     let port: u16 = env_or("PORT", "8080").parse().unwrap_or(8080);

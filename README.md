@@ -305,6 +305,11 @@ helper. Signing is secp256k1/BIP-322 via Bitcoin wallets (Xverse/Unisat), not ed
 no Phantom-style connect flow. A browser demo means hand-rolling message construction and BIP-322
 signing. The Rust demo above is the working proof today.
 
+## Deploying
+
+See [DEPLOY.md](DEPLOY.md). Vercel hosts the frontend only — the Rust backend needs a
+Docker host (Railway/Fly/Render). Zero third-party API keys required.
+
 ## Docs
 
 Full feasibility report, architecture, state machine, and the complete list of upstream bugs
